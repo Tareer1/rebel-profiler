@@ -132,7 +132,9 @@ rebel-profiler doctor
 ```
 
 > **Daily-use cheat-sheet:** [CHEATSHEET.md](CHEATSHEET.md) — every command,
-> env var and exit code on one page.
+> env var and exit code on one page. Recurring jobs can pin model/tier/
+> actor settings once with `--config-file job.toml` (precedence: tier
+> defaults < profile < `RP_LLM__*` env < explicit `--tier` flag).
 
 ### AirLLM-mode: heavy LLMs on low-end hardware
 

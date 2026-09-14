@@ -15,6 +15,7 @@ import json
 import sys
 from pathlib import Path
 
+from ..core.config import get as _cfg_get
 from ..core.errors import EXIT_SUCCESS, EXIT_USAGE, RPError, UsageError
 from ..evidence.audit import AuditChain
 from ..intel.claims import ClaimLedger
@@ -1580,9 +1581,20 @@ def cmd_llm(ctx: AppContext, args: argparse.Namespace) -> int:
     def _queue_dir() -> Path:
         return Path(getattr(args, "queue_dir", "") or default_queue_dir(ctx.data_dir))
 
+    def _limits():
+        # Job profile ([llm] section of --config-file) pins tier/model caps;
+        # live RP_LLM__* env still wins; explicit --tier wins over both.
+        return resolve_limits(tier=getattr(args, "tier", None) or None,
+                              config=ctx.config)
+
+    def _model() -> str:
+        # Model precedence: --model flag > config profile [llm] model > default.
+        return getattr(args, "model", "") or str(
+            _cfg_get(ctx.config, "llm.model", "") or "") or "Qwen/Qwen3-4B"
+
     if args.llm_command == "status":
         budget = read_budget()
-        limits = resolve_limits(tier=getattr(args, "tier", None) or None)
+        limits = _limits()
         plane = ModelPlane(limits=limits)
         try:
             import importlib.util
@@ -1635,10 +1647,10 @@ def cmd_llm(ctx: AppContext, args: argparse.Namespace) -> int:
         return EXIT_SUCCESS
 
     if args.llm_command == "generate":
-        limits = resolve_limits(tier=getattr(args, "tier", None) or None)
+        limits = _limits()
         plane = ModelPlane(limits=limits, prefer_engine=args.engine)
         try:
-            engine = plane.select_engine(args.model, compression=args.compression)
+            engine = plane.select_engine(_model(), compression=args.compression)
             result = plane.generate(args.prompt, max_new_tokens=args.max_tokens)
             payload = result.as_dict()
             payload["engine_kind"] = plane.engine_kind
@@ -1799,6 +1811,9 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--yes", "-y", action="store_true", help="assume yes for confirmations")
     common.add_argument("--actor", default=None, help="acting subject for RBAC (default: RP_ACTOR env or 'operator')")
     common.add_argument("--rbac", action="store_true", help="enforce case membership roles for this command")
+    common.add_argument("--config-file", default=None, metavar="PATH",
+                        help="TOML profile pinning model/tier/etc for recurring jobs "
+                             "(merged between local config and environment)")
     common.add_argument("--data-dir", default=None, help=argparse.SUPPRESS)
 
     sub_common = argparse.ArgumentParser(add_help=False)
@@ -1806,6 +1821,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub_common.add_argument("--yes", "-y", action="store_true", default=argparse.SUPPRESS)
     sub_common.add_argument("--actor", default=argparse.SUPPRESS)
     sub_common.add_argument("--rbac", action="store_true", default=argparse.SUPPRESS)
+    sub_common.add_argument("--config-file", default=argparse.SUPPRESS)
     sub_common.add_argument("--data-dir", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
 
     parser = argparse.ArgumentParser(
@@ -2289,12 +2305,25 @@ def main(argv: list[str] | None = None) -> int:
     if not getattr(args, "group", None):
         parser.print_help()
         return EXIT_USAGE
-    ctx = AppContext(
-        data_dir=args.data_dir, assume_yes=args.yes,
-        actor=getattr(args, "actor", None),
-        rbac_enabled=getattr(args, "rbac", False),
-        queue_on_approval_refusal=True,
-    )
+    try:
+        ctx = AppContext(
+            data_dir=args.data_dir, assume_yes=args.yes,
+            actor=getattr(args, "actor", None),
+            rbac_enabled=getattr(args, "rbac", False),
+            queue_on_approval_refusal=True,
+            profile_path=getattr(args, "config_file", None),
+        )
+    except RPError as exc:
+        # A bad --config-file must fail like every other error: structured,
+        # with a fix hint — never a traceback.
+        if getattr(args, "output", "human") == "human":
+            print(exc.render(), file=sys.stderr)
+        else:
+            print(json.dumps({"error": {"title": exc.title, "message": exc.message,
+                                        "reason": exc.reason, "action": exc.action,
+                                        "exit_code": exc.exit_code}}, indent=2),
+                  file=sys.stderr)
+        return exc.exit_code
     try:
         handlers = {
             "case": cmd_case,

@@ -202,14 +202,29 @@ class BudgetGuard:
 
 
 def resolve_limits(*, tier: str | None = None, environ: dict | None = None,
-                   budget: dict | None = None) -> Limits:
-    """Resolve limits for *tier*, then apply tighten-only env overrides.
+                   budget: dict | None = None,
+                   config: dict | None = None) -> Limits:
+    """Resolve limits for *tier*, then apply tighten-only overrides.
+
+    Precedence: built-in tier defaults < [llm] section of the resolved config
+    (``--config-file`` profile or any layered config) < RP_LLM__* environment
+    (tighten-only) < explicit *tier* argument.
 
     RP_LLM__MAX_RSS_MB / _MAX_CONTEXT_TOKENS / _MAX_NEW_TOKENS /
     _MAX_MODEL_B may only *lower* the caps; RP_LLM__ALLOW_GPU=false and
-    RP_LLM__REQUIRE_COMPRESSION=true may only tighten booleans.
+    RP_LLM__REQUIRE_COMPRESSION=true may only tighten booleans. A config
+    profile pinning an env-var-style value behaves exactly like that env var:
+    it may tighten the tier caps, never loosen them.
     """
     env = dict(os.environ if environ is None else environ)
+    # The [llm] section of a config profile feeds the same tighten-only path:
+    # profile values are applied first so live env vars keep precedence.
+    profile = (config or {}).get("llm", {})
+    if isinstance(profile, dict):
+        for key, value in profile.items():
+            var = f"RP_LLM__{str(key).upper()}"
+            if var not in env and value is not None:
+                env[var] = str(value)
     budget = budget or read_budget()
     tier = (tier or env.get("RP_LLM__TIER") or recommend(budget)).lower()
     if tier not in DEFAULT_LIMITS:

@@ -169,7 +169,33 @@ rebel-profiler ops package rebel-profiler.pyz   # offline zipapp
 rebel-profiler doctor
 ```
 
-## 10. Environment variables
+## 10. Job profiles (`--config-file`)
+
+Pin model/tier/actor settings once, reuse for every recurring job (cron,
+scheduler, CI):
+
+```toml
+# nightly.toml
+[llm]
+tier = "low"                 # tier pin (may be tightened by env, never loosened)
+model = "Qwen/Qwen3-4B"      # default model for llm generate/plan/agent auto
+max_new_tokens = 128         # tighten-only cap
+
+[core]
+actor = "nightly-agent"      # audit subject for the job
+```
+
+```bash
+rebel-profiler --config-file nightly.toml agent auto <case-id> "<goal>"
+rebel-profiler --config-file nightly.toml llm status
+```
+
+Precedence: built-in tier defaults < profile `[llm]` < `RP_LLM__*` env <
+explicit `--tier` flag. Protected security keys stay tighten-only in
+profiles too. Same file works for `llm generate`, `llm plan`, `agent
+run/work/auto` and the daemon.
+
+## 11. Environment variables
 
 | Variable | Meaning | Default |
 |---|---|---|
@@ -187,7 +213,7 @@ rebel-profiler doctor
 | `RP_ACTOR` | acting subject in audit | operator |
 | `RP_API_TOKEN` | token for `serve` gateway | — |
 
-## 11. Exit codes worth memorizing
+## 12. Exit codes worth memorizing
 
 `0` ok · `2` usage · `3` config · `4` permission/policy · `5` scope ·
 `7` dependency · `11` evidence tamper · `12` state · `15` model budget

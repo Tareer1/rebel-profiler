@@ -24,8 +24,9 @@ class AppContext:
 
     def __init__(self, *, data_dir: Path | None = None, assume_yes: bool = False,
                  actor: str | None = None, rbac_enabled: bool = False,
-                 queue_on_approval_refusal: bool = False) -> None:
-        self.config = load_config()
+                 queue_on_approval_refusal: bool = False,
+                 profile_path: str | None = None) -> None:
+        self.config = load_config(profile_path=profile_path)
         configured = get(self.config, "paths.data_dir", str(DEFAULT_DATA_DIR))
         self.data_dir = Path(data_dir if data_dir is not None else configured).expanduser()
         self.data_dir.mkdir(parents=True, exist_ok=True)

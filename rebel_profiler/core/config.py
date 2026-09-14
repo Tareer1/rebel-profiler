@@ -147,14 +147,31 @@ def load_config(
     *,
     local_path: Path | None = None,
     environ: dict[str, str] | None = None,
+    profile_path: Path | str | None = None,
     skip_missing: bool = True,
 ) -> dict:
-    """Resolve the effective configuration from all layers."""
+    """Resolve the effective configuration from all layers.
+
+    ``profile_path`` is the ``--config-file`` job profile: a TOML file merged
+    *between* the local project config and the environment, so a recurring
+    job can pin e.g. ``[llm] tier = "low"`` / ``model = "Qwen/Qwen3-4B"``
+    while live environment variables still win. Protected security keys in a
+    profile follow the same tighten-only rule as every other layer.
+    """
     local = local_path if local_path is not None else LOCAL_CONFIG
     layers: list[tuple[str, dict]] = [("defaults", DEFAULTS)]
     layers.append(("system", _load_toml(SYSTEM_CONFIG, "system")))
     layers.append(("user", _load_toml(USER_CONFIG, "user")))
     layers.append(("local", _load_toml(Path(local), "local")))
+    if profile_path is not None:
+        profile = Path(profile_path).expanduser()
+        if not profile.exists():
+            raise ConfigError(
+                f"Config profile not found: {profile}",
+                reason="--config-file must point at an existing TOML file.",
+                action="Create the profile or check the path.",
+            )
+        layers.append(("profile", _load_toml(profile, "profile")))
     env_layer = _env_layer(environ)
     layers.append(("environment", env_layer))
 
