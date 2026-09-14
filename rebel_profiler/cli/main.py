@@ -615,6 +615,8 @@ def _coerce_param(value: str):
 def cmd_agent(ctx: AppContext, args: argparse.Namespace) -> int:
     from ..agent import run_session
 
+    if args.agent_command == "auto":
+        return cmd_agent_auto(ctx, args)
     rec = ctx.find_case(args.case_id)
     db = ctx.open_case(rec["id"])
     try:
@@ -1334,6 +1336,26 @@ def cmd_browser(ctx: AppContext, args: argparse.Namespace) -> int:
             db.close()
         return EXIT_SUCCESS
     raise UsageError(f"Unknown browser subcommand '{args.browser_command}'")
+
+
+def cmd_agent_auto(ctx: AppContext, args: argparse.Namespace) -> int:
+    """The Autonomous Engineer: LLM plans, repairs and forges its own tools."""
+    from ..llm.autonomous import AutonomousEngineer
+
+    rec = ctx.find_case(args.case_id)
+    db = ctx.open_case(rec["id"])
+    try:
+        engineer = AutonomousEngineer(
+            rec["id"], args.goal, ctx=ctx, db=db,
+            model=getattr(args, "llm", ""),
+            max_actions=args.max_actions,
+            max_repair_attempts=args.max_repair_attempts,
+        )
+        report = engineer.run()
+        emit({"human": report["report_human"], "data": report}, args.output)
+        return EXIT_SUCCESS
+    finally:
+        db.close()
 
 
 def cmd_agent_work(ctx: AppContext, args: argparse.Namespace) -> int:
@@ -2130,6 +2152,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_arun.add_argument("--max-actions", type=int, default=12)
     p_arun.add_argument("--llm", default="", metavar="MODEL",
                         help="use the LLM planner (AirLLM-mode) with this model")
+    p_aauto = agent_subs.add_parser("auto", parents=[sub_common],
+                                    help="Autonomous Engineer: plan → execute → repair → forge missing tools (LLM self-sufficient)")
+    p_aauto.add_argument("case_id")
+    p_aauto.add_argument("goal")
+    p_aauto.add_argument("--llm", default="", metavar="MODEL",
+                         help="model for planning/repair (AirLLM local by default; RP_LLM__ENGINE=external for a provider)")
+    p_aauto.add_argument("--max-actions", type=int, default=12)
+    p_aauto.add_argument("--max-repair-attempts", type=int, default=2)
     p_awrk = agent_subs.add_parser("work", parents=[sub_common], help="self-repair session: work list → error log → revise → asks you")
     p_awrk.add_argument("case_id")
     p_awrk.add_argument("goal")

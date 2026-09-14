@@ -118,6 +118,7 @@ rebel-profiler llm models                 # what fits THIS machine
 rebel-profiler llm generate "summarize: …" --model Qwen/Qwen3-4B
 rebel-profiler llm plan <case-id> "map example.com"   # LLM planner (dry)
 rebel-profiler agent run <case-id> "map example.com" --llm Qwen/Qwen3-4B
+rebel-profiler agent auto <case-id> "map example.com fully"   # Autonomous Engineer
 rebel-profiler llm submit "long job"      # SYN → resident daemon → ACK
 rebel-profiler llm data <case-id> "what is exposed?"   # case data via job file
 rebel-profiler llm daemon                 # claim → generate → UNLOAD the model
@@ -171,6 +172,29 @@ static gate (no subprocess/socket/os/eval/open reach), a sandbox test of the
 argv builder, HMAC signing before registration. The same loop serves the LLM
 plane: missing planner capabilities become forged adapters instead of shell
 escape hatches.
+
+### The Autonomous Engineer (`agent auto`)
+
+One command, the LLM does the rest — repair and extend the tool itself:
+
+```
+rebel-profiler agent auto <case-id> "map example.com fully" --llm Qwen/Qwen3-4B
+```
+
+  1. **PLAN** — the LLM planner reads the goal + the live action contract and
+     emits validated proposals (unknown action/param = structured rejection).
+  2. **EXECUTE** — the work list runs through the six gates; failures become
+     structured error-log entries with deterministic fix hints.
+  3. **REPAIR** — the LLM reviser reads the error + fix hint and returns a
+     corrected proposal (bounded retries; scope/policy blocks are NEVER
+     auto-retried; no weights → honest give-up, never invented fixes).
+  4. **EXTEND** — when the error log says the capability itself is missing
+     ("no adapter"), the LLM writes a new adapter and Feature Forge's gates
+     decide: static AST gate → subprocess sandbox → HMAC signature → live
+     registration, with bounded rewrite rounds against gate findings.
+
+Every phase is gated, evidenced and audited. The operator reads the session
+report and decides what's next — the tool grows, the law doesn't change.
 
 ## Output modes
 
@@ -346,7 +370,7 @@ tamper-verified.
 ## Development
 
 ```bash
-python3 -m pytest tests/ -q      # 466 tests
+python3 -m pytest tests/ -q      # 483 tests
 python3 -m rebel_profiler.cli.main doctor
 ```
 

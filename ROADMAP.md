@@ -133,7 +133,11 @@ decides.
   payloads and responses redacted; local AirLLM stays the default — without
   the pin nothing leaves the machine
 - [x] CLI surface: `llm status/models/generate/plan/submit/data/result/daemon`
-- [x] 55 dedicated tests (suite total 468, green)
+- [x] Autonomous Engineer (`agent auto`) — the LLM repairs and extends the
+  tool itself: plan → execute → repair (LLM reviser, bounded, scope/policy
+  never auto-retried) → extend (missing capability ⇒ LLM-written adapter
+  through the full Forge gate pipeline with bounded rewrite rounds)
+- [x] 70 dedicated tests (suite total 483, green)
 
 Each phase keeps Phase 1's invariants: no raw shell, no fake adapters, no
 evidence-free claims, scope always fail-closed, LLM proposes but never
