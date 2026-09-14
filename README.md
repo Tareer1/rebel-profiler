@@ -122,6 +122,10 @@ rebel-profiler llm submit "long job"      # SYN → resident daemon → ACK
 rebel-profiler llm data <case-id> "what is exposed?"   # case data via job file
 rebel-profiler llm daemon                 # claim → generate → UNLOAD the model
 
+# LLM uses the operator's browser (extension/, load unpacked in Chrome):
+# poll (SYN) → claim (SYN-ACK) → result (ACK); scope re-checked client-side
+rebel-profiler browser serve <case-id>    # localhost bridge for the extension
+
 # 18. Health check
 rebel-profiler doctor
 ```
@@ -130,10 +134,14 @@ rebel-profiler doctor
 
 The LLM plane wraps the full AirLLM feature set behind the hardware budget
 (`pip install 'rebel-profiler[airllm]'`): layer-wise streaming (one layer
-resident at a time), 4/8-bit block-wise compression, AutoModel across
-Llama/Qwen/DeepSeek/Mistral/Phi/Gemma, prefetching, profiling, layer-shards
-path, `delete_original`, `hf_token` — GPU optional, CPU/MPS placement
-automatic. Tighten-only env caps (`RP_LLM__TIER`, `RP_LLM__MAX_RSS_MB`,
+resident at a time), 4/8-bit block-wise compression (CUDA only — on CPU-only
+boxes the guard refuses compression up front because AirLLM's bitsandbytes
+path quantizes on-device; uncompressed layer streaming already keeps RAM tiny
+— verified live: Qwen2.5-0.5B, ~816MB peak RSS, coherent generation, clean
+unload), AutoModel across Llama/Qwen/DeepSeek/Mistral/Phi/Gemma, prefetching,
+profiling, layer-shards path, `delete_original`, `hf_token` — GPU optional,
+CPU/MPS placement automatic (AirLLM's `device=` is set explicitly, never the
+cuda:0 default). Tighten-only env caps (`RP_LLM__TIER`, `RP_LLM__MAX_RSS_MB`,
 `RP_LLM__MAX_CONTEXT_TOKENS`, `RP_LLM__MAX_NEW_TOKENS`, `RP_LLM__MAX_MODEL_B`,
 `RP_LLM__ALLOW_GPU`, `RP_LLM__REQUIRE_COMPRESSION`) can never loosen a tier.
 Where weights cannot load at all, a deterministic tiny engine keeps every

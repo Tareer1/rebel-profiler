@@ -162,6 +162,17 @@ class BudgetGuard:
                 reason=f"Tier '{self.limits.tier}' only allows 4/8-bit compressed models.",
                 action="Pass compression='4bit' (or '8bit') when loading.",
             )
+        if compressed and not _cuda_available():
+            # AirLLM's block-wise compression quantizes on-device (bnb .cuda());
+            # a CPU-only torch cannot even split the layers. Refuse early with
+            # an honest fix instead of a mid-load AssertionError.
+            raise ModelBudgetError(
+                "Compression requires CUDA",
+                reason="AirLLM's 4/8-bit block-wise compression (bitsandbytes) "
+                       "quantizes on the GPU; this machine has no usable CUDA.",
+                action="Run uncompressed — layer-wise streaming already keeps "
+                       "memory tiny — or install a CUDA build of torch.",
+            )
 
     def check_generate(self, max_new_tokens: int) -> None:
         if max_new_tokens > self.limits.max_new_tokens:
@@ -231,9 +242,6 @@ def resolve_limits(*, tier: str | None = None, environ: dict | None = None,
         require_compression=env.get("RP_LLM__REQUIRE_COMPRESSION", "").strip().lower()
         in {"1", "true", "yes"} or limits.require_compression,
     )
-    if not limits.allow_gpu:
-        # A CPU-only run carries the whole pipeline in RAM: compress and cap.
-        limits = replace(limits, require_compression=True)
     return limits
 
 

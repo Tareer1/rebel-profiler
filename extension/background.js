@@ -16,25 +16,38 @@
  *     no script injection into pages beyond the declared extractors.
  *   - results never include page content beyond the requested extractors,
  *     bounded in size.
+ * Protocol mirrors the 3-way handshake used across the whole tool:
+ * poll (SYN) → claim/ack (SYN-ACK) → result (ACK).
  */
 
 const BRIDGE = "http://127.0.0.1:8765";
-const POLL_MS = 2000;
+const POLL_MS = 2000;   // NOTE: MV3 clamps alarm periods to ≥30s; the popup's
+                        // "Run now" button triggers immediate ticks between alarms.
+const FETCH_TIMEOUT_MS = 10000;
 let scopePatterns = [];      // e.g. ["*.lab.example.test", "example.com"]
 let running = false;
 
 async function api(path, options = {}) {
-  const token = (await chrome.storage.local.get("token")).token || "";
-  const res = await fetch(BRIDGE + path, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: "Bearer " + token } : {}),
-      ...(options.headers || {}),
-    },
-  });
-  if (!res.ok) throw new Error("bridge " + path + " → " + res.status);
-  return res.json();
+  // AbortController guard: a bridge that accepts TCP but never answers must
+  // not wedge the worker (running would stay true and polling would die).
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const token = (await chrome.storage.local.get("token")).token || "";
+    const res = await fetch(BRIDGE + path, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: "Bearer " + token } : {}),
+        ...(options.headers || {}),
+      },
+    });
+    if (!res.ok) throw new Error("bridge " + path + " → " + res.status);
+    return res.json();
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function refreshScope() {

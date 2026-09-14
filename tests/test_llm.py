@@ -6,6 +6,15 @@ import json
 
 import pytest
 
+
+def _cuda_present() -> bool:
+    try:
+        import torch
+
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
 from rebel_profiler.cli.main import main
 from rebel_profiler.core.errors import (
     DependencyUnavailableError,
@@ -54,17 +63,28 @@ class TestBudget:
         limits = resolve_limits(environ=dict(__import__("os").environ))
         assert limits.max_model_b == DEFAULT_LIMITS["tiny"].max_model_b
 
-    def test_cpu_only_forces_compression(self, monkeypatch):
+    def test_cpu_only_does_not_force_compression(self, monkeypatch):
+        # AirLLM's block-wise compression quantizes on CUDA (bnb .cuda()); a
+        # CPU-only box must run UNCOMPRESSED (layer streaming keeps RAM tiny).
         monkeypatch.setenv("RP_LLM__TIER", "high")
         monkeypatch.setenv("RP_LLM__ALLOW_GPU", "false")
         limits = resolve_limits(environ=dict(__import__("os").environ))
         assert limits.allow_gpu is False
-        assert limits.require_compression is True
+        assert limits.require_compression is False
 
     def test_guard_refuses_oversized_model(self):
         guard = BudgetGuard(DEFAULT_LIMITS["tiny"])
         with pytest.raises(ModelBudgetError):
             guard.check_model(70.0, compressed=False)
+
+    def test_guard_refuses_compression_without_cuda(self):
+        # No CUDA in CI: compressed loads are refused with an honest fix hint.
+        if _cuda_present():
+            return
+        guard = BudgetGuard(DEFAULT_LIMITS["mid"])
+        with pytest.raises(ModelBudgetError) as excinfo:
+            guard.check_model(4.0, compressed=True)
+        assert "CUDA" in excinfo.value.message
 
     def test_guard_requires_compression_on_tiny(self):
         guard = BudgetGuard(DEFAULT_LIMITS["tiny"])
@@ -141,14 +161,26 @@ class TestEngines:
             AirLlmEngine("meta-llama/Llama-3.3-70B-Instruct",
                          limits=DEFAULT_LIMITS["tiny"])
 
-    def test_airllm_engine_cpu_only_requires_compression(self, monkeypatch):
+    def test_compression_without_cuda_refused_early(self, monkeypatch):
         from rebel_profiler.llm.inference import AirLlmEngine
 
         limits = Limits(max_rss_mb=2048, max_context_tokens=1024,
                         max_new_tokens=128, max_model_b=70.0,
                         allow_gpu=False, require_compression=False, tier="mid")
-        with pytest.raises(ModelBudgetError):
-            AirLlmEngine("Qwen/Qwen3-4B", limits=limits)
+        # This box has no CUDA (CI/CPU): compression must be refused up front.
+        with pytest.raises(ModelBudgetError) as excinfo:
+            AirLlmEngine("Qwen/Qwen3-4B", limits=limits, compression="8bit")
+        assert "CUDA" in excinfo.value.message
+
+    def test_uncompressed_engine_passes_construction_without_cuda(self):
+        from rebel_profiler.llm.inference import AirLlmEngine
+
+        limits = Limits(max_rss_mb=2048, max_context_tokens=1024,
+                        max_new_tokens=128, max_model_b=70.0,
+                        allow_gpu=False, require_compression=False, tier="mid")
+        # Construction succeeds; only load() touches weights/network.
+        engine = AirLlmEngine("Qwen/Qwen3-4B", limits=limits)
+        assert engine.compressed is False
 
 
 # ---------------------------------------------------------------- planner

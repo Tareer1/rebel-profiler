@@ -102,13 +102,6 @@ class AirLlmEngine:
         self.last_device = ""
         self.budget = budget or read_budget()
         self.guard = BudgetGuard(limits)
-        if not limits.allow_gpu and not self.compressed:
-            raise ModelBudgetError(
-                "CPU-only placement requires compressed weights",
-                reason="A CPU run carries the whole pipeline in RAM; "
-                       "uncompressed checkpoints would push the box into swap.",
-                action="Pass compression='4bit' (or '8bit'), or re-enable the GPU.",
-            )
         self.guard.check_model(model_params_b(model), compressed=self.compressed)
 
     # -- placement -------------------------------------------------------------
@@ -136,9 +129,12 @@ class AirLlmEngine:
             return
         self.guard.check_rss()
         airllm = _require_airllm()
+        device = self._device()
         try:
+            # AirLLM 4.x defaults to cuda:0; pass the placement explicitly so
+            # CPU-only and Apple-silicon machines never hit a CUDA assertion.
             self._model = airllm.AutoModel.from_pretrained(
-                self.model_id, **self.options)
+                self.model_id, device=device, **self.options)
             self._tokenizer = self._model.tokenizer
         except Exception as exc:  # structured failure, never a stack-trace dump
             self.unload()

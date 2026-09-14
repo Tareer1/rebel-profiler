@@ -105,12 +105,14 @@ decides.
   `RP_LLM__REQUIRE_COMPRESSION`) — RSS ceiling refuses allocation-heavy calls
   with structured errors instead of swap-death
 - [x] AirLLM engine with the full low-memory feature set: layer-wise streaming
-  (one layer resident at a time), 4/8-bit block-wise compression, AutoModel
-  across Llama/Qwen/DeepSeek/Mistral/Phi/Gemma, prefetching, profiling,
+  (one layer resident at a time), 4/8-bit block-wise compression (CUDA-only —
+  refused early with a fix hint on CPU-only boxes), AutoModel across
+  Llama/Qwen/DeepSeek/Mistral/Phi/Gemma, prefetching, profiling,
   layer-shards path, `delete_original`, `hf_token`
-- [x] GPU-optional placement: CPU-only enforcement on GPU boxes
-  (`RP_LLM__ALLOW_GPU=false` forces compression), Apple-silicon MPS,
-  per-generation device reporting
+- [x] GPU-optional placement: explicit `device=` pass-through (CPU/MPS on
+  boxes without CUDA — never AirLLM's cuda:0 default), per-generation device
+  reporting; **live-verified end to end** on CPU (Qwen2.5-0.5B: coherent
+  generation, ~816MB peak RSS, clean unload)
 - [x] Deterministic tiny engine fallback — no weights, no RAM spike, no
   hallucination; fallback reason always recorded, never silent
 - [x] Model catalog: parameter sizing for repo ids/local paths + tier-aware
@@ -131,7 +133,7 @@ decides.
   payloads and responses redacted; local AirLLM stays the default — without
   the pin nothing leaves the machine
 - [x] CLI surface: `llm status/models/generate/plan/submit/data/result/daemon`
-- [x] 53 dedicated tests (suite total 466, green)
+- [x] 55 dedicated tests (suite total 468, green)
 
 Each phase keeps Phase 1's invariants: no raw shell, no fake adapters, no
 evidence-free claims, scope always fail-closed, LLM proposes but never
