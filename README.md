@@ -131,6 +131,9 @@ rebel-profiler browser serve <case-id>    # localhost bridge for the extension
 rebel-profiler doctor
 ```
 
+> **Daily-use cheat-sheet:** [CHEATSHEET.md](CHEATSHEET.md) — every command,
+> env var and exit code on one page.
+
 ### AirLLM-mode: heavy LLMs on low-end hardware
 
 The LLM plane wraps the full AirLLM feature set behind the hardware budget
