@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rebel-profiler"
+version = "1.0.0"
+description = "Kali Linux Cybersecurity Intelligence & Authorized Security Operations Framework"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "Rebel Profiler Project" }]
+dependencies = []
+
+[project.optional-dependencies]
+# AirLLM-mode: 70B-class models on low-end hardware (layer-wise streaming).
+# GPU is optional — CPU-only and Apple-silicon (MPS) placement both work.
+airllm = ["airllm>=2.0", "torch"]
+airllm-compression = ["airllm>=2.0", "torch", "bitsandbytes"]
+
+[project.scripts]
+rebel-profiler = "rebel_profiler.cli.main:main"
+
+[tool.setuptools.packages.find]
+include = ["rebel_profiler*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

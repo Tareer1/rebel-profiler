@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Rebel Profiler Bridge",
+  "version": "1.0.0",
+  "description": "Executes scope-checked, read-only extraction jobs from the local Rebel Profiler bridge. The user prompts; the LLM plans; this extension collects.",
+  "permissions": ["cookies", "webNavigation", "storage", "alarms", "tabs", "scripting"],
+  "host_permissions": [
+    "http://127.0.0.1:8765/*",
+    "http://localhost:8765/*",
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Rebel Profiler Bridge",
+    "default_popup": "popup.html"
+  },
+  "icons": {}
+}

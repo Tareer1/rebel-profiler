@@ -1,0 +1,60 @@
+"""Execution plane: structured actions only, never raw shell."""
+
+from .discovery import (
+    DISCOVERY_ADAPTERS,
+    OsFingerprintAdapter,
+    PortScanAdapter,
+    ServiceDetectAdapter,
+)
+from .tool_exec import TOOL_EXEC_ADAPTERS, ToolExecAdapter
+from .adapters import (
+    CertTransparencyAdapter,
+    HeaderAuditAdapter,
+    HttpProbeAdapter,
+    NucleiAdapter,
+    PassiveDnsMultiAdapter,
+    SmbEnumAdapter,
+    TlsPostureAdapter,
+    TracerouteAdapter,
+    WhoisAdapter,
+)
+from .broker import (
+    ActionRequest,
+    Adapter,
+    AdapterRegistry,
+    BUILTIN_ADAPTERS,
+    EchoAdapter,
+    ExecutionBroker,
+    ExecutionResult,
+    GateResult,
+    NmapDiscoveryAdapter,
+    PassiveDnsAdapter,
+)
+
+__all__ = [
+    "ActionRequest",
+    "DISCOVERY_ADAPTERS",
+    "OsFingerprintAdapter",
+    "PortScanAdapter",
+    "ServiceDetectAdapter",
+    "TOOL_EXEC_ADAPTERS",
+    "ToolExecAdapter",
+    "Adapter",
+    "AdapterRegistry",
+    "BUILTIN_ADAPTERS",
+    "CertTransparencyAdapter",
+    "EchoAdapter",
+    "ExecutionBroker",
+    "ExecutionResult",
+    "GateResult",
+    "HeaderAuditAdapter",
+    "HttpProbeAdapter",
+    "NmapDiscoveryAdapter",
+    "NucleiAdapter",
+    "PassiveDnsAdapter",
+    "PassiveDnsMultiAdapter",
+    "SmbEnumAdapter",
+    "TlsPostureAdapter",
+    "TracerouteAdapter",
+    "WhoisAdapter",
+]
