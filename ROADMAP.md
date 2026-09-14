@@ -97,6 +97,46 @@ Each phase keeps Phase 1's invariants: no raw shell, no fake adapters, no
 evidence-free claims, scope always fail-closed, LLM proposes but never
 decides.
 
+## Phase 7 — LLM plane: AirLLM-mode ✅
+
+- [x] Hardware budget guard: tiers (tiny/low/mid/high), tighten-only env caps
+  (`RP_LLM__TIER`, `RP_LLM__MAX_RSS_MB`, `RP_LLM__MAX_CONTEXT_TOKENS`,
+  `RP_LLM__MAX_NEW_TOKENS`, `RP_LLM__MAX_MODEL_B`, `RP_LLM__ALLOW_GPU`,
+  `RP_LLM__REQUIRE_COMPRESSION`) — RSS ceiling refuses allocation-heavy calls
+  with structured errors instead of swap-death
+- [x] AirLLM engine with the full low-memory feature set: layer-wise streaming
+  (one layer resident at a time), 4/8-bit block-wise compression, AutoModel
+  across Llama/Qwen/DeepSeek/Mistral/Phi/Gemma, prefetching, profiling,
+  layer-shards path, `delete_original`, `hf_token`
+- [x] GPU-optional placement: CPU-only enforcement on GPU boxes
+  (`RP_LLM__ALLOW_GPU=false` forces compression), Apple-silicon MPS,
+  per-generation device reporting
+- [x] Deterministic tiny engine fallback — no weights, no RAM spike, no
+  hallucination; fallback reason always recorded, never silent
+- [x] Model catalog: parameter sizing for repo ids/local paths + tier-aware
+  `llm models` shortlist
+- [x] LLM planner (`llm plan`, `agent run --llm`): bounded redacted prompt →
+  validated proposals through the same no-fake-adapter gate as everything
+  else; garbage/unknown-action/undeclared-param replies are structured
+  rejections, never executions
+- [x] Resident daemon (`llm daemon`): checksummed 3-way handshake job files
+  (SYN → SYN-ACK → ACK), idempotent results, tamper rejection, **model
+  unloads after every pass** — the machine goes quiet
+- [x] Case data via handshake only (`llm data`): bounded, redacted data packs
+  (findings + surface graph + exposure) built deterministically from the
+  report engines; the LLM never opens the database; packs are delimited DATA,
+  never instructions
+- [x] Opt-in external brain: OpenAI-compatible provider, pin with
+  `RP_LLM__ENGINE=external` + `RP_LLM__API_KEY`/`_FILE` + `RP_LLM__API_BASE`;
+  payloads and responses redacted; local AirLLM stays the default — without
+  the pin nothing leaves the machine
+- [x] CLI surface: `llm status/models/generate/plan/submit/data/result/daemon`
+- [x] 53 dedicated tests (suite total 466, green)
+
+Each phase keeps Phase 1's invariants: no raw shell, no fake adapters, no
+evidence-free claims, scope always fail-closed, LLM proposes but never
+decides.
+
 - [x] Error taxonomy + documented exit-code contract
 - [x] Secret redaction pipeline
 - [x] Scope engine (fail-closed, wildcards, exclusions, expiry windows)

@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: pytest (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install package (core is stdlib-only)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m pip install pytest
+
+      - name: Show environment
+        run: |
+          python --version
+          python -m pip list
+
+      - name: Run full test suite
+        run: python -m pytest tests/ -q
+
+      # The LLM plane must import and fall back to the tiny engine cleanly
+      # on machines without airllm — exercise that contract explicitly.
+      - name: LLM plane smoke (tiny-engine fallback contract)
+        run: |
+          python -m rebel_profiler.cli.main llm status
+          python -m rebel_profiler.cli.main llm models
