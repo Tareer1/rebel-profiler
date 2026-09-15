@@ -662,6 +662,10 @@ def _cmd_intel_crawl(ctx: AppContext, args: argparse.Namespace) -> int:
             evidence=EvidenceStore(db, blobs_dir=ctx.case_dir(rec["id"]) / "blobs"),
             max_pages=args.max_pages,
             max_depth=args.max_depth,
+            # Persist the findings: without this the audit's claims die with
+            # the in-memory ledger, so `report`, `surface build`, `intel
+            # fusion` and `bounty assess` would never see them.
+            db=db,
         )
         report = auditor.crawl(args.urls)
         stats = report["stats"]
@@ -1374,8 +1378,10 @@ def cmd_agent_work(ctx: AppContext, args: argparse.Namespace) -> int:
             max_actions=args.max_actions,
             max_repair_attempts=args.max_repair_attempts,
         )
-        if getattr(args, "llm", ""):
-            planner = _make_llm_planner(args.llm, ctx.broker(db).adapters)
+        if getattr(args, "llm", "") or _cfg_get(ctx.config, "llm.model", ""):
+            planner = _make_llm_planner(getattr(args, "llm", ""),
+                                        ctx.broker(db).adapters,
+                                        config=ctx.config)
         else:
             planner = _make_planner(args.plan)
         reviser = _make_reviser(args.plan)
@@ -1394,14 +1400,18 @@ def _make_reviser(plan_text: str):
     return reviser
 
 
-def _make_llm_planner(model: str, registry):
+def _make_llm_planner(model: str, registry, *, config=None):
     """Build the LLM planner (AirLLM-mode) wired to the live adapter registry.
 
     The plane unloads after the session — the CLI process never stays heavy.
+    A config profile's [llm] model applies when no --llm flag is given, so a
+    --config-file job pins its model without repeating it on every command.
     """
     from ..agent import PlannerView
     from ..llm import LlmPlanner
 
+    if not model and config is not None:
+        model = str(_cfg_get(config, "llm.model", "") or "")
     base = LlmPlanner(model=model or None, registry=registry)
 
     def llm_planner(view: PlannerView):
@@ -1565,6 +1575,111 @@ def cmd_complaint(ctx: AppContext, args: argparse.Namespace) -> int:
         db.close()
 
 
+def _llm_script(ctx: AppContext, args: argparse.Namespace) -> int:
+    """Script plane: the LLM writes a code file; the daemon executes it."""
+    from ..llm.codescript import (
+        default_script_dir,
+        list_scripts,
+        load_script_result,
+        submit_script,
+    )
+
+    def _script_dir() -> Path:
+        return Path(getattr(args, "script_dir", "") or default_script_dir(ctx.data_dir))
+
+    if args.script_command == "submit":
+        source = ""
+        if getattr(args, "file", None):
+            source = Path(args.file).read_text()
+        elif args.source:
+            source = args.source
+        else:
+            import sys as _sys
+
+            source = _sys.stdin.read() if not _sys.stdin.isatty() else ""
+        payload = json.loads(args.payload) if args.payload else {}
+        envelope = submit_script(
+            source, script_dir=_script_dir(), payload=payload,
+            name=args.name or "", requested_by="operator",
+            timeout_s=args.timeout)
+        emit({"human": (f"Script {envelope['script_id']} submitted (stored, not "
+                        "executed — the daemon gates it, then runs it)"),
+              "data": envelope}, args.output)
+        return EXIT_SUCCESS
+
+    if args.script_command == "result":
+        result = load_script_result(args.script_id, script_dir=_script_dir())
+        if result is None:
+            emit({"human": f"Script {args.script_id}: no result yet (daemon "
+                           "still gating/executing?)",
+                  "data": {"script_id": args.script_id, "state": "pending"}}, args.output)
+            return EXIT_SUCCESS
+        if result.get("state") == "done":
+            human = (f"Script {args.script_id}: done in {result.get('elapsed_s', '?')}s\n"
+                     f"result: {json.dumps(result.get('result'), default=str)[:2000]}")
+        else:
+            human = (f"Script {args.script_id}: {result.get('state')} — "
+                     f"{result.get('error', '')}\nfix: {result.get('fix', '')}")
+        emit({"human": human, "data": result}, args.output)
+        return EXIT_SUCCESS
+
+    if args.script_command == "list":
+        rows = list_scripts(_script_dir())
+        emit({"human": f"{len(rows)} script(s) in the queue", "data": rows}, args.output)
+        return EXIT_SUCCESS
+
+    if args.script_command == "author":
+        from ..llm.codegen import author_script
+
+        payload = json.loads(args.payload) if args.payload else {}
+        envelope = author_script(
+            args.goal, script_dir=_script_dir(), payload=payload,
+            name=args.name, model=args.model or None)
+        engine = envelope.get("generator", {}).get("engine", "?")
+        emit({"human": (f"The {engine} engine wrote script {envelope['script_id']} "
+                        f"({len(envelope['source'].splitlines())} lines) for: "
+                        f"{args.goal}\n"
+                        "Stored, NOT executed. The daemon gates it, then runs it:"
+                        f"\n  rebel-profiler llm script run --once "
+                        f"--script-dir {_script_dir()}"
+                        f"\n  rebel-profiler llm script result "
+                        f"{envelope['script_id']} --script-dir {_script_dir()}"),
+              "data": envelope}, args.output)
+        return EXIT_SUCCESS
+
+    if args.script_command == "retry":
+        from ..llm.codegen import retry_script
+
+        envelope = retry_script(args.script_id, script_dir=_script_dir(),
+                                model=args.model or None)
+        emit({"human": (f"Re-authored script {envelope['script_id']} from the failure "
+                        f"of {args.script_id} ({envelope['fixed_from']['state']}).\n"
+                        f"  was: {envelope['fixed_from']['error'][:200]}\n"
+                        "Stored, NOT executed — run the daemon to gate and run it."),
+              "data": envelope}, args.output)
+        return EXIT_SUCCESS
+
+    if args.script_command == "run":
+        from ..llm.codescript import ScriptDaemon
+
+        daemon = ScriptDaemon(
+            _script_dir(), interval=args.interval,
+            data_dir=ctx.data_dir, max_runs=args.max_runs)
+        if args.once:
+            handled = daemon.poll_once()
+            emit({"human": f"one pass: {len(handled)} script(s) handled",
+                  "data": handled}, args.output)
+            return EXIT_SUCCESS
+        emit({"human": f"script daemon polling {_script_dir()} every "
+                       f"{args.interval}s (Ctrl-C to stop)",
+              "data": {"script_dir": str(_script_dir()), "interval": args.interval}},
+             args.output)
+        daemon.run_forever()
+        return EXIT_SUCCESS
+
+    raise UsageError(f"Unknown llm script command '{args.script_command}'")
+
+
 def cmd_llm(ctx: AppContext, args: argparse.Namespace) -> int:
     """AirLLM-mode: hardware budget, engines, generation, planner, daemon."""
     from ..llm import (
@@ -1615,6 +1730,9 @@ def cmd_llm(ctx: AppContext, args: argparse.Namespace) -> int:
                 "allow_gpu": limits.allow_gpu,
             },
             "airllm_installed": airllm_ok,
+            "llama_cpp_installed": _module_present("llama_cpp"),
+            "torch_installed": _module_present("torch"),
+            "local_models": _local_model_counts(),
             "engine": plane.engine_kind or "none",
             "model": "",
             "loaded": False,
@@ -1641,16 +1759,72 @@ def cmd_llm(ctx: AppContext, args: argparse.Namespace) -> int:
 
         budget = read_budget()
         models = suggest_models(budget["total_ram_mb"], cpu_only=budget["cpu_only"])
+        # On-disk checkpoints surface first: the local engines run those with
+        # NO download and NO airllm install (the local-first rule).
+        local = []
+        try:
+            from ..llm.native import discover_local_models
+
+            local = discover_local_models()
+        except Exception:
+            local = []
+        gguf = []
+        try:
+            from ..llm.gguf import discover_local_gguf
+
+            gguf = discover_local_gguf()
+        except Exception:
+            gguf = []
         emit({"human": f"{sum(1 for m in models if m['fits'])} model(s) fit this machine "
-                       f"({budget['total_ram_mb']}MB RAM)",
-              "data": models}, args.output)
+                       f"({budget['total_ram_mb']}MB RAM); "
+                       f"{len(gguf)} GGUF + {len(local)} HF checkpoint(s) on disk\n"
+                       "local checkpoints with their run command: "
+                       "rebel-profiler llm local",
+              "data": {"local_gguf": gguf, "local": local, "catalog": models}},
+             args.output)
         return EXIT_SUCCESS
+
+    if args.llm_command in {"local", "setup"}:
+        from ..llm.setup import (local_models, render_local, render_setup,
+                                 setup_plan)
+
+        limits = _limits()
+        if args.llm_command == "local":
+            payload = local_models(limits=limits)
+            emit({"human": render_local(payload), "data": payload}, args.output)
+            return EXIT_SUCCESS
+        plan = setup_plan(engine=getattr(args, "engine", None), limits=limits)
+        emit({"human": render_setup(plan), "data": plan}, args.output)
+        return EXIT_SUCCESS
+
+    if args.llm_command == "prepare":
+        # AirLLM layer-shards: bake a LOCAL checkpoint into per-layer shard
+        # files (optionally 4/8-bit quantized), optionally reclaiming the
+        # original disk after verification. Never touches the network.
+        from ..llm.native import prepare_layer_shards
+
+        manifest = prepare_layer_shards(
+            args.model, args.out, bits=args.bits,
+            delete_original=args.delete_original)
+        total_mb = sum(s["bytes"] for s in manifest["shards"]) // (1024 * 1024)
+        emit({"human": (f"prepared {len(manifest['shards'])} layer shard(s) "
+                        f"({total_mb}MB, bits={manifest['bits']}) at {args.out}"
+                        + (" — originals deleted after verification"
+                           if args.delete_original else "")),
+              "data": manifest}, args.output)
+        return EXIT_SUCCESS
+
+    if args.llm_command == "script":
+        return _llm_script(ctx, args)
 
     if args.llm_command == "generate":
         limits = _limits()
         plane = ModelPlane(limits=limits, prefer_engine=args.engine)
         try:
-            engine = plane.select_engine(_model(), compression=args.compression)
+            requested = _model()
+            if getattr(args, "local", False):
+                requested, _why = _best_local_model(limits)
+            engine = plane.select_engine(requested, compression=args.compression)
             result = plane.generate(args.prompt, max_new_tokens=args.max_tokens)
             payload = result.as_dict()
             payload["engine_kind"] = plane.engine_kind
@@ -1738,6 +1912,7 @@ def cmd_llm(ctx: AppContext, args: argparse.Namespace) -> int:
             _queue_dir(), interval=args.interval, model=args.model or "",
             prefer_engine=args.engine, max_runs=args.max_runs,
             db_factory=lambda case_id: ctx.open_case(case_id),
+            config=ctx.config,
         )
         if args.once:
             handled = daemon.poll_once()
@@ -1754,6 +1929,257 @@ def cmd_llm(ctx: AppContext, args: argparse.Namespace) -> int:
     raise UsageError(f"Unknown llm command '{args.llm_command}'")
 
 
+def _case_program(db, case_id: str) -> str:
+    """Recover the bug-bounty program handle recorded at scope-import time."""
+    try:
+        entries = [dict(r) for r in db.scope_entries(case_id)]
+    except Exception:
+        return ""
+    for entry in entries:
+        note = str(entry.get("note") or "")
+        if "bug-bounty program scope (" in note:
+            inside = note.split("bug-bounty program scope (", 1)[1]
+            return inside.split(")", 1)[0].strip()
+    return ""
+
+
+def cmd_bounty(ctx: AppContext, args: argparse.Namespace) -> int:
+    """Authorized bug-bounty workflow: program scope → checks → report.
+
+    Scope is the authorization. Importing a program's published scope writes
+    ordinary scope entries, so every check that follows is gated by the same
+    fail-closed engine as the rest of the tool — nothing here is special-cased
+    or exempt.
+    """
+    from ..intel.bounty import assess
+    from ..intel.program import parse_scope_file
+
+    if args.bounty_command == "import":
+        rec = ctx.find_case(args.case_id)
+        db = ctx.open_case(rec["id"])
+        try:
+            try:
+                doc = parse_scope_file(args.file, program=args.program)
+            except (ValueError, OSError) as exc:
+                raise UsageError(
+                    f"Could not parse the scope document: {exc}",
+                    reason="Accepted inputs are HackerOne-style JSON/CSV exports "
+                           "or a plain one-target-per-line list.",
+                    action="Pass a scope export, or a text file listing in-scope "
+                           "targets (use '!target' lines for exclusions).",
+                ) from exc
+
+            source_note = doc["authorization_source"]
+            added_in = added_out = 0
+            for entry in doc["includes"]:
+                note = " | ".join(x for x in (source_note, entry["note"]) if x)
+                db.add_scope_entry(rec["id"], entry["value"], excluded=False, note=note)
+                added_in += 1
+            for entry in doc["excludes"]:
+                note = " | ".join(x for x in (f"EXCLUDED | {source_note}",
+                                              entry["note"]) if x)
+                db.add_scope_entry(rec["id"], entry["value"], excluded=True, note=note)
+                added_out += 1
+
+            activated = False
+            if args.activate:
+                ctx.set_case_status(rec["id"], "active")
+                activated = True
+
+            human = [
+                f"Imported program scope into case {rec['id']}"
+                + (f" ({args.program})" if args.program else ""),
+                f"  in-scope   : {added_in}",
+                f"  exclusions : {added_out}",
+                f"  skipped    : {len(doc['skipped'])}",
+            ]
+            for row in doc["skipped"][:8]:
+                human.append(f"    - {row['asset'] or '(blank)'} — {row['reason']}")
+            human.append("")
+            if activated:
+                human.append("Case is ACTIVE — scope enforcement is live.")
+            else:
+                human.append("Case is NOT active yet. Review the scope, then run:")
+                human.append(f"  rebel-profiler case activate {rec['id']}")
+            human.append(f"  rebel-profiler bounty run {rec['id']} --execute")
+            emit({"human": "\n".join(human), "data": {
+                "case": rec["id"], "program": args.program,
+                "includes": added_in, "excludes": added_out,
+                "skipped": doc["skipped"], "activated": activated}},
+                args.output)
+            return EXIT_SUCCESS
+        finally:
+            db.close()
+
+    if args.bounty_command in {"assess", "report"}:
+        from ..intel import ClaimLedger
+
+        rec = ctx.find_case(args.case_id)
+        db = ctx.open_case(rec["id"])
+        try:
+            ledger = ClaimLedger.load_from_db(db, rec["id"])
+            report = assess(ledger, rec["id"], program=_case_program(db, rec["id"]))
+            emit({"human": report.render_human(), "data": report.as_dict()},
+                 args.output)
+            return EXIT_SUCCESS if report.findings else 1
+        finally:
+            db.close()
+
+    if args.bounty_command == "run":
+        from ..evidence.store import EvidenceStore
+        from ..intel import ClaimLedger, ScopeEnforcedWebAuditor, SourceRegistry
+        from ..intel.bounty_session import seed_url, split_asset
+
+        rec = ctx.find_case(args.case_id)
+        db = ctx.open_case(rec["id"])
+        try:
+            entries = [dict(r) for r in db.scope_entries(rec["id"])]
+            includes = [str(e["value"]) for e in entries if not e.get("excluded")]
+            if not includes:
+                raise UsageError(
+                    f"Case {rec['id']} has no in-scope assets",
+                    reason="The check chain has nothing authorized to run against.",
+                    action=f"rebel-profiler bounty import {rec['id']} <scope-file>",
+                )
+            assets = includes[: max(1, args.max_assets)]
+            scope_engine = ctx.scope_engine()
+
+            seeds: list[str] = []
+            skipped: list[dict] = []
+            for asset in assets:
+                if "/" in asset and "://" not in asset:
+                    skipped.append({
+                        "asset": asset,
+                        "reason": "network range — web audit does not apply; use "
+                                  f"'intel collect {rec['id']} port-scan <host>'"})
+                    continue
+                target = split_asset(asset)
+                if target is None:
+                    skipped.append({"asset": asset, "reason": "not a web host"})
+                    continue
+                host, port = target
+                status = scope_engine.evaluate(rec["id"], host)
+                if status != "in_scope":
+                    skipped.append({"asset": asset, "reason": status})
+                    continue
+                seeds.append(seed_url(args.scheme, host, port))
+
+            plan = {
+                "case": rec["id"],
+                "case_status": rec["status"],
+                "check_family": "scope-enforced web audit "
+                                "(headers, cookie flags, cleartext forms, TLS posture)",
+                "seeds": seeds,
+                "skipped": skipped,
+                "executed": False,
+            }
+
+            if not args.execute:
+                human = [
+                    f"PLAN ONLY — {len(seeds)} in-scope asset(s) would be audited "
+                    f"in case {rec['id']}:",
+                ]
+                for seed in seeds:
+                    human.append(f"  - {seed}")
+                for row in skipped:
+                    human.append(f"  (skip) {row['asset']} — {row['reason']}")
+                human.append("")
+                human.append("Nothing ran. Re-run with --execute to dispatch, or use "
+                             "'intel crawl' for a single URL.")
+                emit({"human": "\n".join(human), "data": plan}, args.output)
+                return EXIT_SUCCESS
+
+            if rec["status"] != "active":
+                raise UsageError(
+                    f"Case {rec['id']} is '{rec['status']}', not active",
+                    reason="Scope enforcement only authorizes targets in an ACTIVE case.",
+                    action=f"rebel-profiler case activate {rec['id']}",
+                )
+            if not seeds:
+                raise UsageError(
+                    "No seed survived the scope check",
+                    reason="Every imported asset was out of scope or unusable.",
+                    action="Review the imported scope with 'case scope show'.",
+                )
+
+            auditor = ScopeEnforcedWebAuditor(
+                rec["id"], scope_engine=scope_engine,
+                ledger=ClaimLedger(SourceRegistry()),
+                evidence=EvidenceStore(db, blobs_dir=ctx.case_dir(rec["id"]) / "blobs"),
+                max_pages=max(5, min(4 * len(seeds), 50)), max_depth=1,
+                db=db,   # findings must reach the claim ledger, not just memory
+            )
+            report = auditor.crawl(seeds)
+            plan.update({"executed": True, "audit": report})
+            stats = report["stats"]
+            human = [
+                f"Audited {stats['pages_audited']} page(s) across "
+                f"{len(seeds)} in-scope asset(s): {stats['findings']} finding(s)",
+            ]
+            for row in skipped:
+                human.append(f"  (skip) {row['asset']} — {row['reason']}")
+            human.append("")
+            human.append("Every finding above is hash-chained evidence. "
+                         "Next: rebel-profiler bounty assess " f"{rec['id']}")
+            emit({"human": "\n".join(human), "data": plan}, args.output)
+            return EXIT_SUCCESS if stats["pages_audited"] else 1
+        finally:
+            db.close()
+
+    if args.bounty_command == "auto":
+        # Imported here, not at module scope: other branches of this function
+        # import the same names locally, which makes them function-locals.
+        from ..evidence.audit import AuditChain as _AuditChain
+        from ..intel.bounty_session import BountySession
+        from ..intel.claims import ClaimLedger as _ClaimLedger
+        from ..intel.sources import SourceRegistry as _SourceRegistry
+        from ..llm.codescript import default_script_dir
+
+        rec = ctx.find_case(args.case_id)
+        db = ctx.open_case(rec["id"])
+        try:
+            def _on_stage(record: dict) -> None:
+                if args.verbose:
+                    detail = record.get("detail", "")
+                    print(f"  [{record.get('status', '?')}] {record['stage']}"
+                          + (f" — {detail}" if detail else ""),
+                          file=sys.stderr)
+
+            session = BountySession(
+                rec["id"], goal=args.goal, db=db,
+                scope_engine=ctx.scope_engine(),
+                case_dir=ctx.case_dir(rec["id"]), case_status=rec["status"],
+                ledger=_ClaimLedger(_SourceRegistry()),
+                evidence=ctx.evidence_store(db, rec["id"]),
+                audit=_AuditChain(db),
+                max_assets=args.max_assets, max_pages=args.max_pages,
+                max_scripts=0 if args.no_author else args.max_scripts,
+                max_repair_rounds=args.max_repair_rounds,
+                scheme=args.scheme, model=args.model or None,
+                tier=args.tier,
+                script_dir=Path(getattr(args, "script_dir", "")
+                                or default_script_dir(ctx.data_dir)),
+                author_scripts=not args.no_author,
+                on_stage=_on_stage,
+            )
+            result = session.run()
+            findings = (result.report or {}).get("findings") or []
+            if getattr(args, "save", False):
+                out_dir = ctx.case_dir(rec["id"]) / "reports"
+                out_dir.mkdir(parents=True, exist_ok=True)
+                path = out_dir / f"bounty-{result.case_id}.json"
+                path.write_text(json.dumps(result.as_dict(), indent=2,
+                                           sort_keys=True, default=str) + "\n")
+                result.stats["report_path"] = str(path)
+            emit({"human": result.render_human(), "data": result.as_dict()},
+                 args.output)
+            return EXIT_SUCCESS if findings else 1
+        finally:
+            db.close()
+
+    raise UsageError(f"Unknown bounty command '{args.bounty_command}'")
+
+
 def cmd_doctor(ctx: AppContext, args: argparse.Namespace) -> int:
     import shutil
 
@@ -1763,13 +2189,28 @@ def cmd_doctor(ctx: AppContext, args: argparse.Namespace) -> int:
     checks: list[dict] = []
     checks.append({"check": "config", "ok": "yes", "detail": f"data_dir={ctx.data_dir}"})
     checks.append({"check": "workspace index", "ok": "yes", "detail": str(ctx.index_path)})
+    domains = list_domains()
     checks.append({"check": "knowledge domains",
-                   "ok": "yes" if len(list_domains()) == 15 else "no",
-                   "detail": f"{len(list_domains())} domains loaded"})
+                   "ok": "yes" if len(domains) >= 15 else "no",
+                   "detail": f"{len(domains)} domains, "
+                             f"{sum(d['topics'] for d in domains)} topics loaded"})
     for b in ("nmap", "dig", "whois", "curl"):
         found = shutil.which(b) is not None
         checks.append({"check": f"tool: {b}", "ok": "yes" if found else "no",
                        "detail": "available" if found else "not installed (adapters will refuse)"})
+    # Optional LLM engines are informational: the deterministic tiny engine
+    # always exists, so a missing optional dependency is never a failure.
+    for module, label in (("llama_cpp", "llm engine: gguf (llama-cpp-python)"),
+                          ("torch", "llm engine: native (torch)"),
+                          ("airllm", "llm engine: airllm")):
+        checks.append({
+            "check": label, "ok": "yes",
+            "detail": "installed" if _module_present(module) else
+                      "not installed (optional — 'llm setup' prints the command)"})
+    local = _local_model_counts()
+    checks.append({"check": "llm local models", "ok": "yes",
+                   "detail": f"{local['gguf']} GGUF + {local['hf']} HF "
+                             "checkpoint(s) on disk"})
     for section, key in PROTECTED_SECURITY_KEYS:
         checks.append({"check": f"protected: {section}.{key}", "ok": "yes", "detail": "enforced"})
     ok = all(c["ok"] == "yes" for c in checks)
@@ -1782,6 +2223,62 @@ def _llm_tiers():
     from ..llm.budget import BUDGET_TIERS
 
     return BUDGET_TIERS
+
+
+def _module_present(module: str) -> bool:
+    try:
+        import importlib.util
+
+        return importlib.util.find_spec(module) is not None
+    except Exception:
+        return False
+
+
+def _local_model_counts() -> dict:
+    counts = {"gguf": 0, "hf": 0}
+    try:
+        from ..llm.gguf import discover_local_gguf
+
+        counts["gguf"] = len(discover_local_gguf())
+    except Exception:
+        pass
+    try:
+        from ..llm.native import discover_local_models
+
+        counts["hf"] = len(discover_local_models())
+    except Exception:
+        pass
+    return counts
+
+
+def _best_local_model(limits) -> tuple[str, str]:
+    """Pick the best-fitting LOCAL checkpoint for --local (no download, ever)."""
+    from ..llm.budget import BUDGET_TIERS
+    from ..llm.setup import local_models
+
+    payload = local_models(limits=limits)
+    for engine in ("gguf", "hf"):
+        fitting = [r for r in payload.get(engine) or [] if r.get("fits")]
+        if fitting:
+            row = fitting[0]
+            return (row["path"] if engine == "gguf" else row["model"],
+                    f"best local {engine} checkpoint that fits tier '{limits.tier}'")
+    # Nothing fits THIS tier. That is not necessarily "no model": the verdict
+    # now includes peak RSS, so a checkpoint can be right-sized for a wider
+    # tier while being too heavy for the default one. Say which tier fits.
+    narrower: list[str] = []
+    for row in (payload.get("gguf") or []):
+        if row.get("needs_tier") and row["needs_tier"] != limits.tier:
+            narrower.append(
+                f"'{row['name']}' needs tier '{row['needs_tier']}'")
+    raise UsageError(
+        "No local checkpoint fits this tier",
+        reason="--local never downloads and never exceeds the hardware budget.",
+        action=("Run 'rebel-profiler llm local' to see what is on disk, or "
+                "re-run with a wider tier: "
+                + ("; ".join(narrower[:3]) if narrower
+                   else "check the tier caps with 'llm status'")),
+    )
 
 
 def _params(pairs: list[list[str]] | None) -> dict:
@@ -2250,14 +2747,27 @@ def build_parser() -> argparse.ArgumentParser:
                          help="actually select+load this model, then unload")
     llm_subs.add_parser("models", parents=[sub_common],
                         help="models that fit this machine (AirLLM-mode sizes)")
+    llm_subs.add_parser("local", parents=[sub_common],
+                        help="checkpoints already on this machine (GGUF + HF cache) "
+                             "with the exact command to run each")
+    p_lsetup = llm_subs.add_parser("setup", parents=[sub_common],
+                                   help="hardware-aware setup: what to install for each "
+                                        "engine, with copy-paste commands")
+    p_lsetup.add_argument("--engine", default=None,
+                          choices=["airllm", "gguf", "native", "external"])
+    p_lsetup.add_argument("--tier", default=None, choices=list(_llm_tiers()))
     p_lgen = llm_subs.add_parser("generate", parents=[sub_common],
                                  help="one bounded generation (engine loads and unloads)")
     p_lgen.add_argument("prompt")
     p_lgen.add_argument("--model", default="Qwen/Qwen3-4B")
     p_lgen.add_argument("--max-tokens", type=int, default=None)
     p_lgen.add_argument("--tier", default=None, choices=list(_llm_tiers()))
-    p_lgen.add_argument("--engine", default=None, choices=["airllm", "tiny", "external"])
+    p_lgen.add_argument("--engine", default=None,
+                        choices=["airllm", "gguf", "native", "tiny", "external"])
     p_lgen.add_argument("--compression", default="", choices=["", "4bit", "8bit"])
+    p_lgen.add_argument("--local", action="store_true",
+                        help="use the best LOCAL checkpoint that fits this tier "
+                             "(GGUF or HF cache) instead of the model default")
     p_lplan = llm_subs.add_parser("plan", parents=[sub_common],
                                   help="LLM planner: goal → validated proposals (dry)")
     p_lplan.add_argument("case_id")
@@ -2288,10 +2798,118 @@ def build_parser() -> argparse.ArgumentParser:
                                     help="resident generator: claim → generate → unload")
     p_ldaemon.add_argument("--model", default="")
     p_ldaemon.add_argument("--interval", type=float, default=5.0)
-    p_ldaemon.add_argument("--engine", default=None, choices=["airllm", "tiny", "external"])
+    p_ldaemon.add_argument("--engine", default=None,
+                           choices=["airllm", "gguf", "native", "tiny", "external"])
     p_ldaemon.add_argument("--max-runs", type=int, default=None)
     p_ldaemon.add_argument("--once", action="store_true", help="single pass (tests/CI)")
     p_ldaemon.add_argument("--queue-dir", default="")
+
+    # llm prepare — AirLLM layer-shard bake (optionally 4/8-bit quantized)
+    p_lprep = llm_subs.add_parser("prepare", parents=[sub_common],
+                                  help="bake a LOCAL checkpoint into per-layer shards "
+                                       "(optionally 4/8-bit quantized; --delete-original "
+                                       "reclaims disk after verification)")
+    p_lprep.add_argument("model", help="repo id already in the HF cache, or a local path")
+    p_lprep.add_argument("out", help="output shards directory")
+    p_lprep.add_argument("--bits", type=int, default=0, choices=[0, 4, 8])
+    p_lprep.add_argument("--delete-original", action="store_true")
+
+    # llm script — the LLM writes a code file, the daemon executes it
+    p_lscript = llm_subs.add_parser("script", parents=[sub_common],
+                                    help="script plane: LLM-written code file, gated "
+                                         "and sandbox-executed by the daemon")
+    script_subs = p_lscript.add_subparsers(dest="script_command", required=True)
+    p_lscsub = script_subs.add_parser("submit", parents=[sub_common],
+                                      help="submit a script file (stored, NOT executed here)")
+    p_lscsub.add_argument("--file", default="", help="path to the .py script")
+    p_lscsub.add_argument("--source", default="", help="inline Python source")
+    p_lscsub.add_argument("--payload", default="", help="JSON data passed to run(payload)")
+    p_lscsub.add_argument("--name", default="")
+    p_lscsub.add_argument("--timeout", type=float, default=60.0)
+    p_lscsub.add_argument("--script-dir", default="")
+    p_lscres = script_subs.add_parser("result", parents=[sub_common],
+                                      help="read one script's actual result")
+    p_lscres.add_argument("script_id")
+    p_lscres.add_argument("--script-dir", default="")
+    p_lsclist = script_subs.add_parser("list", parents=[sub_common], help="list scripts + states")
+    p_lsclist.add_argument("--script-dir", default="")
+    p_lscrun = script_subs.add_parser("run", parents=[sub_common],
+                                      help="run the script daemon (gates → sandbox → result)")
+    p_lscrun.add_argument("--interval", type=float, default=5.0)
+    p_lscrun.add_argument("--max-runs", type=int, default=None)
+    p_lscrun.add_argument("--once", action="store_true", help="single pass (tests/CI)")
+    p_lscrun.add_argument("--script-dir", default="")
+    p_lscauth = script_subs.add_parser("author", parents=[sub_common],
+                                       help="the LLM writes a script for a goal, then "
+                                            "submits it through the static gate")
+    p_lscauth.add_argument("goal", help="what the script should compute")
+    p_lscauth.add_argument("--payload", default="", help="JSON data for run(payload)")
+    p_lscauth.add_argument("--name", default="")
+    p_lscauth.add_argument("--model", default="")
+    p_lscauth.add_argument("--script-dir", default="")
+    p_lscretry = script_subs.add_parser("retry", parents=[sub_common],
+                                        help="feed a failed script's error + fix hint back "
+                                             "to the LLM and re-submit the corrected source")
+    p_lscretry.add_argument("script_id")
+    p_lscretry.add_argument("--model", default="")
+    p_lscretry.add_argument("--script-dir", default="")
+
+    # bounty — authorized bug-bounty workflow (program scope → checks → report)
+    p_bounty = subs.add_parser("bounty", parents=[sub_common],
+                               help="authorized bug-bounty workflow: import a program's "
+                                    "published scope, run in-scope checks, report")
+    bounty_subs = p_bounty.add_subparsers(dest="bounty_command", required=True)
+    p_bimp = bounty_subs.add_parser("import", parents=[sub_common],
+                                    help="import a program's scope document into a case "
+                                         "(HackerOne CSV/JSON, or a plain target list)")
+    p_bimp.add_argument("case_id")
+    p_bimp.add_argument("file", help="scope export: HackerOne CSV/JSON or plain list")
+    p_bimp.add_argument("--program", default="", help="program handle/name (recorded as "
+                                                       "the authorization source)")
+    p_bimp.add_argument("--activate", action="store_true",
+                        help="activate the case right away (default: leave it for review)")
+    p_bassess = bounty_subs.add_parser("assess", parents=[sub_common],
+                                       help="triage collected evidence into reportable "
+                                            "findings with severity, CWE and reproduction")
+    p_bassess.add_argument("case_id")
+    p_breport = bounty_subs.add_parser("report", parents=[sub_common],
+                                       help="final submission-ready report (real evidence only)")
+    p_breport.add_argument("case_id")
+    p_brun = bounty_subs.add_parser("run", parents=[sub_common],
+                                    help="run the authorized check chain over every "
+                                         "in-scope asset, then assess")
+    p_brun.add_argument("case_id")
+    p_brun.add_argument("--execute", action="store_true",
+                        help="actually dispatch (default: show the plan only)")
+    p_brun.add_argument("--max-assets", type=int, default=25)
+    p_brun.add_argument("--scheme", default="https", choices=["https", "http"])
+    p_bauto = bounty_subs.add_parser(
+        "auto", parents=[sub_common],
+        help="one stated goal in, an evidenced report out: scope → recon → assess → "
+             "LLM-authored scripts → execute → repair → report")
+    p_bauto.add_argument("case_id")
+    p_bauto.add_argument("goal", help="plain-language goal, e.g. \"this scope came from "
+                                       "HackerOne — find what you can, test it, and give "
+                                       "me a report with real results, no demos\"")
+    p_bauto.add_argument("--max-assets", type=int, default=25)
+    p_bauto.add_argument("--max-pages", type=int, default=25)
+    p_bauto.add_argument("--max-scripts", type=int, default=3,
+                         help="cap on LLM-authored scripts (default 3)")
+    p_bauto.add_argument("--max-repair-rounds", type=int, default=2,
+                         help="how many times a failing script goes back to the model")
+    p_bauto.add_argument("--no-author", action="store_true",
+                         help="skip LLM script authoring (deterministic audit + report only)")
+    p_bauto.add_argument("--scheme", default="https", choices=["https", "http"])
+    p_bauto.add_argument("--model", default="", help="model id for authoring")
+    p_bauto.add_argument("--tier", default=None, choices=list(_llm_tiers()),
+                         help="budget tier for authoring (a big local GGUF may "
+                              "need a wider tier than the default)")
+    p_bauto.add_argument("--script-dir", default="",
+                         help="script queue directory (default: workspace llm_scripts)")
+    p_bauto.add_argument("--save", action="store_true",
+                         help="also write the full session JSON into the case's reports/")
+    p_bauto.add_argument("--verbose", action="store_true",
+                         help="stream each stage as it runs (stderr)")
 
     # doctor
     subs.add_parser("doctor", parents=[sub_common], help="environment and configuration health check")
@@ -2356,6 +2974,7 @@ def main(argv: list[str] | None = None) -> int:
             "system": cmd_system,
             "detection": cmd_detection,
             "complaint": cmd_complaint,
+            "bounty": cmd_bounty,
             "doctor": cmd_doctor,
         }
         return handlers[args.group](ctx, args)

@@ -329,7 +329,7 @@ class ExecutionBroker:
 
         # Gate 1+2: scope (fail closed) + canonical target
         try:
-            canonical = self._scope.validate(request.case_id, request.target)
+            self._scope.validate(request.case_id, request.target)
         except ScopeViolationError:
             raise
         risk = self._risk.classify(adapter.capability_class)

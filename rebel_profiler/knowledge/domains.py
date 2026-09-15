@@ -177,6 +177,131 @@ DOMAINS: tuple[KnowledgeDomain, ...] = (
                 defensive="Document the split so tenant-side controls are not assumed away.",
                 keywords=("saas", "paas", "iaas", "cloud", "responsibility"),
             ),
+            Topic(
+                key="tcp_ip_internals",
+                title="TCP/IP Internals (handshake, flags, windowing)",
+                capability_class="info",
+                summary=(
+                    "How connections actually behave: the three-way handshake "
+                    "(SYN, SYN/ACK, ACK), TCP flags (FIN, RST, PSH, URG), "
+                    "sequence/acknowledgement numbering, receive windows, MSS "
+                    "and congestion control, retransmission timers and the "
+                    "connection state machine (LISTEN → SYN-SENT → ESTABLISHED "
+                    "→ TIME-WAIT).\n"
+                    "Why it matters operationally: every port state a scanner "
+                    "reports is an inference from this state machine. 'Filtered' "
+                    "means silence (a dropped packet), 'closed' means an active "
+                    "RST, and 'open' means a completed handshake. Misreading the "
+                    "difference is the most common source of wrong findings."
+                ),
+                defensive=(
+                    "Stateful firewalls and SYN-flood protection act on exactly "
+                    "these states; TCP-state telemetry is the highest-signal "
+                    "source for scan detection."
+                ),
+                keywords=("tcp", "handshake", "syn", "rst", "window", "flag", "state"),
+            ),
+            Topic(
+                key="dns_wire_dnssec",
+                title="DNS Resolution, Record Semantics & DNSSEC",
+                capability_class="passive_recon",
+                summary=(
+                    "The resolution path (stub → recursive → root → TLD → "
+                    "authoritative) and what each record type actually asserts: "
+                    "A/AAAA addresses, CNAME chaining, MX preference, NS "
+                    "delegation, SOA authority, TXT policy records (SPF, "
+                    "DMARC, DKIM selectors, site verification), PTR reverse "
+                    "mapping, CAA issuance authorization, SRV service location. "
+                    "Also covers caching/TTL effects on freshness and the "
+                    "DNSSEC chain of trust (DS, DNSKEY, RRSIG, NSEC/NSEC3 "
+                    "denial of existence) plus DoH/DoT transport."
+                ),
+                defensive=(
+                    "DNSSEC signing, CAA limits on mis-issuance, and resolver "
+                    "logging catch subdomain takeover and data leakage."
+                ),
+                keywords=("dns", "dnssec", "rrsig", "caa", "ttl", "resolution", "doh"),
+            ),
+            Topic(
+                key="tls_handshake",
+                title="TLS Handshake & Certificate Validation",
+                capability_class="config_assessment",
+                summary=(
+                    "The negotiated handshake: ClientHello/ServerHello, "
+                    "supported versions, cipher suite and key-exchange choice, "
+                    "SNI and ALPN, the certificate chain the server presents, "
+                    "hostname verification, session resumption (tickets/PSK) and "
+                    "the TLS 1.3 1-RTT flow with its removal of legacy "
+                    "renegotiation. Explains why a scanner's verdict depends on "
+                    "both versions *and* cipher suites, and why a valid chain is "
+                    "not the same as a secure configuration."
+                ),
+                defensive=(
+                    "Modern TLS baselines, HSTS, certificate automation and CT "
+                    "monitoring are the controls this topic validates."
+                ),
+                keywords=("tls", "handshake", "sni", "alpn", "cipher suite", "certificate", "chain"),
+            ),
+            Topic(
+                key="http_protocol",
+                title="HTTP Semantics, HTTP/2–3 and Proxies",
+                capability_class="web_assessment",
+                summary=(
+                    "Request/response semantics: methods and their safety and "
+                    "idempotence, status-code families, header categories "
+                    "(representation, conditional, caching, security, "
+                    "hop-by-hop vs end-to-end), cookie attributes, redirect "
+                    "chains and caching directives. Covers HTTP/2 stream "
+                    "multiplexing and HPACK, HTTP/3 over QUIC, and how forward "
+                    "and reverse proxies rewrite requests — including which "
+                    "headers a proxy strips, which is exactly where "
+                    "request-smuggling-style defects live."
+                ),
+                defensive=(
+                    "Normalize and validate protocol framing at the edge; "
+                    "never trust a proxy-injected header without verification."
+                ),
+                keywords=("http", "http/2", "http/3", "quic", "headers", "proxy", "caching"),
+            ),
+            Topic(
+                key="nat_firewall_boundaries",
+                title="NAT, Firewalls, NGFW, WAF & Load Balancers",
+                capability_class="network_mapping",
+                summary=(
+                    "How boundary devices reshape what an assessment observes: "
+                    "SNAT/DNAT and port forwarding hiding internal topology, "
+                    "stateful vs stateless ACL evaluation order, implicit "
+                    "deny versus explicit drop (silent vs reset responses), "
+                    "next-generation firewall application identification, WAF "
+                    "request inspection, and load-balancer virtual IPs with "
+                    "health-check endpoints that reveal back-end fleets."
+                ),
+                defensive=(
+                    "Consistent deny behaviour, egress filtering and documented "
+                    "VIP/DNAT maps prevent accidental exposure and make scan "
+                    "results interpretable."
+                ),
+                keywords=("nat", "firewall", "ngfw", "waf", "load balancer", "vip", "acl"),
+            ),
+            Topic(
+                key="ipv6_ndp",
+                title="IPv6, SLAAC, NDP & Dual-Stack Risk",
+                capability_class="discovery",
+                summary=(
+                    "IPv6 specifics that change assessment and defence: 128-bit "
+                    "addressing and prefix delegation, SLAAC address "
+                    "autoconfiguration, Neighbor Discovery (NS/NA/RS/RA) "
+                    "replacing ARP, temporary/privacy addresses, and link-local "
+                    "scope. The recurring real-world problem is dual-stack "
+                    "asymmetry: controls written for IPv4 only, so the IPv6 "
+                    "path reaches services nothing is monitoring."
+                ),
+                defensive=(
+                    "RA Guard, DHCPv6 snooping, IPv6 ACL parity with IPv4, and "
+                    "monitoring the v6 path as closely as the v4 path."
+                ),
+                keywords=("ipv6", "slaac", "ndp", "router advertisement", "dual stack", "link local"),
+            ),
         ),
     ),
     KnowledgeDomain(
@@ -882,6 +1007,158 @@ DOMAINS: tuple[KnowledgeDomain, ...] = (
                 ),
                 defensive="Compiler hardening, memory-safe languages, patch cadence.",
                 keywords=("buffer overflow", "heap", "aslr", "dep", "memory safety"),
+            ),
+            Topic(
+                key="vulnerability_lifecycle",
+                title="Vulnerability Lifecycle & the Zero-Day Window",
+                capability_class="info",
+                summary=(
+                    "A vulnerability's life: introduction in code, discovery "
+                    "(researcher, vendor, or adversary), triage and "
+                    "reproduction, root-cause analysis, fix development, "
+                    "release, then public advisory.\n"
+                    "\n"
+                    "A *zero-day* is a defect with no vendor fix available yet "
+                    "— the term describes the defender's position (zero days of "
+                    "warning), not the defect's severity. The **zero-day "
+                    "window** is the interval between a defect being exploited "
+                    "in the wild and a fix being deployable; everything a "
+                    "defender can do in that window is compensating control: "
+                    "virtual patching at the edge, feature shutdown, "
+                    "reachability reduction, targeted detection, and honest "
+                    "risk acceptance.\n"
+                    "\n"
+                    "This framework carries the *process and the defensive "
+                    "playbook*, never a stock of unpatched exploits: knowledge "
+                    "of the lifecycle is what lets an operator tell a "
+                    "fast-moving incident from a routine finding."
+                ),
+                defensive=(
+                    "Track patch latency as a measurable control, rehearse "
+                    "compensating actions before you need them, and monitor "
+                    "for exploitation of recently-disclosed defects."
+                ),
+                keywords=("zero-day", "0day", "lifecycle", "patch latency", "compensating control"),
+            ),
+            Topic(
+                key="severity_scoring",
+                title="Severity Scoring: CVSS, Reachability & Risk",
+                capability_class="info",
+                summary=(
+                    "How severity is actually assigned: CVSS metric groups "
+                    "(base for the intrinsic defect, threat for real-world "
+                    "exploit activity, environmental for local compensating "
+                    "controls), vector strings and why the *same* CVE scores "
+                    "differently on two estates. Covers CWE for the defect "
+                    "class, CVE for the specific instance, EPSS-style "
+                    "exploit-likelihood signals, and the discipline of rating "
+                    "by reachability plus demonstrated impact instead of "
+                    "inflating every missing header to 'critical'.\n"
+                    "\n"
+                    "Rule of thumb this framework follows: CVSS is an *input* "
+                    "to prioritisation, never the verdict — and an unproven "
+                    "defect is reported as unproven."
+                ),
+                defensive=(
+                    "Prioritise by reachability and exploit evidence; record "
+                    "environmental overrides so the score matches your estate."
+                ),
+                keywords=("cvss", "cwe", "cve", "severity", "epss", "reachability", "scoring"),
+            ),
+            Topic(
+                key="coordinated_disclosure",
+                title="Coordinated Vulnerability Disclosure",
+                capability_class="info",
+                summary=(
+                    "The professional path from discovery to public knowledge: "
+                    "contacting the owner through a published security.txt or "
+                    "vulnerability-disclosure policy, supplying a minimal "
+                    "reproducible proof and impact analysis, agreeing a "
+                    "disclosure timeline (the 90-day norm, with extensions for "
+                    "genuinely complex fixes), CVE identifier assignment "
+                    "through a CNA, coordinated advisory release, and the "
+                    "escalation options when a vendor stays silent.\n"
+                    "\n"
+                    "Why coordination rather than immediate publication: users "
+                    "need a patch to exist before a roadmap to the defect does. "
+                    "Full disclosure is a legitimate last resort, not a first "
+                    "move, and it never includes working exploitation tooling."
+                ),
+                defensive=(
+                    "Publish security.txt and a disclosure policy, staff a "
+                    "triage inbox, and credit reporters — it shortens the "
+                    "window you are exposed for."
+                ),
+                keywords=("disclosure", "cvd", "cna", "security.txt", "embargo", "advisory", "90 days"),
+            ),
+            Topic(
+                key="bounty_program_operations",
+                title="Bug-Bounty Program Operations & Scope Discipline",
+                capability_class="info",
+                summary=(
+                    "How bounty programs actually work and where researchers "
+                    "lose money: structured scope with explicit in-scope and "
+                    "out-of-scope assets, safe-harbor wording and its limits, "
+                    "per-asset instructions (rate limits, no automated "
+                    "scanning, no data exfiltration, no DoS), severity-to-payout "
+                    "tables, duplicate and informational handling, and what a "
+                    "triager can act on.\n"
+                    "\n"
+                    "Report quality is the differentiator: clear preconditions, "
+                    "minimal reproducible steps, the exact request/response "
+                    "that proves it, honest impact, a suggested fix, and "
+                    "nothing touched beyond the minimum needed to demonstrate "
+                    "the issue."
+                ),
+                defensive=(
+                    "Keep program scope and instructions current — ambiguous "
+                    "scope produces disputed findings on both sides."
+                ),
+                keywords=("bug bounty", "hackerone", "scope", "safe harbor", "triage", "payout", "report"),
+            ),
+            Topic(
+                key="patch_diff_research",
+                title="Patch Diffing & Regression Research",
+                capability_class="config_assessment",
+                summary=(
+                    "Reading a vendor patch to understand the defect class: "
+                    "comparing pre- and post-fix binaries or source, spotting "
+                    "the added bounds check or the changed authorisation branch, "
+                    "and inferring which sibling code paths share the same "
+                    "mistake. This is standard defensive research — the output "
+                    "is a *class* of defect to hunt for in your own "
+                    "estate.\n"
+                    "\n"
+                    "The defensive corollary is blunt: once a patch ships, the "
+                    "diff is public and an attacker's work drops sharply. "
+                    "Patch latency is measurable risk."
+                ),
+                defensive=(
+                    "Deploy security patches on a defined SLA; use the diff to "
+                    "audit sibling components for the same defect class."
+                ),
+                keywords=("patch diff", "regression", "root cause", "sibling bug", "patch latency"),
+            ),
+            Topic(
+                key="exploitability_mitigations",
+                title="Exploitability & the Mitigation Stack",
+                capability_class="info",
+                summary=(
+                    "What separates a defect from an exploit: a reachable flaw, "
+                    "a controllable primitive, and a path around the mitigation "
+                    "stack — ASLR, DEP/NX, stack canaries, CFG/CFI, sandboxing, "
+                    "and language-level memory safety. Explains why 'the code "
+                    "is buggy' and 'the system is exploitable' are different "
+                    "statements, and how to report a serious-but-unproven "
+                    "defect honestly: state the precondition, state what you "
+                    "demonstrated, and say plainly what you did not."
+                ),
+                defensive=(
+                    "Compiler hardening on by default, memory-safe languages "
+                    "for new code, W^X and sandboxing — each mitigation "
+                    "removes a class of primitive, not one bug."
+                ),
+                keywords=("exploitability", "mitigation", "aslr", "cfi", "canary", "sandbox", "unproven"),
             ),
         ),
     ),

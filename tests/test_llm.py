@@ -377,6 +377,124 @@ def workspace(tmp_path, monkeypatch):
     return ["--data-dir", str(tmp_path / "data")]
 
 
+# ---------------------------------------------------------------- native engine
+
+
+class TestNativeEngine:
+    @pytest.fixture()
+    def tiny_checkpoint(self, tmp_path):
+        """Build a REAL runnable 1-layer checkpoint on disk (no download)."""
+        torch = pytest.importorskip("torch")
+        import struct
+
+        d = tmp_path / "m"
+        d.mkdir()
+        (d / "config.json").write_text(json.dumps({
+            "model_type": "qwen2", "hidden_size": 16, "num_hidden_layers": 1,
+            "num_attention_heads": 2, "num_key_value_heads": 1,
+            "intermediate_size": 32, "vocab_size": 64,
+            "tie_word_embeddings": True, "rms_norm_eps": 1e-6,
+            "rope_theta": 10000.0,
+        }))
+        H, V, I = 16, 64, 32
+        tensors = {
+            "model.embed_tokens.weight": (V, H),
+            "model.layers.0.input_layernorm.weight": (H,),
+            "model.layers.0.post_attention_layernorm.weight": (H,),
+            "model.layers.0.self_attn.q_proj.weight": (H, H),
+            "model.layers.0.self_attn.k_proj.weight": (H // 2, H),
+            "model.layers.0.self_attn.v_proj.weight": (H // 2, H),
+            "model.layers.0.self_attn.o_proj.weight": (H, H),
+            "model.layers.0.mlp.gate_proj.weight": (I, H),
+            "model.layers.0.mlp.up_proj.weight": (I, H),
+            "model.layers.0.mlp.down_proj.weight": (H, I),
+            "model.norm.weight": (H,),
+        }
+        header, blob = {}, bytearray()
+        for name, shape in tensors.items():
+            n = 1
+            for s in shape:
+                n *= s
+            header[name] = {"dtype": "F32", "shape": list(shape),
+                            "data_offsets": [len(blob), len(blob) + 4 * n]}
+            blob += torch.randn(*shape).float().view(-1).numpy().tobytes()
+        hb = json.dumps(header).encode()
+        with open(d / "model.safetensors", "wb") as fh:
+            fh.write(struct.pack("<Q", len(hb)) + hb + bytes(blob))
+        return d
+
+    def test_safetensors_reader(self, tiny_checkpoint):
+        from rebel_profiler.llm.native import SafeTensorFile
+
+        sf = SafeTensorFile(tiny_checkpoint / "model.safetensors")
+        assert "model.embed_tokens.weight" in sf.tensor_names()
+        w = sf.load("model.embed_tokens.weight")
+        assert w.shape == (64, 16)
+        sf.close()
+
+    def test_discovery_and_resolution(self, tiny_checkpoint, monkeypatch):
+        from rebel_profiler.llm import native
+
+        monkeypatch.setenv("HF_HOME", str(tmp_path_hf(tiny_checkpoint)))
+        models = native.discover_local_models(
+            hf_cache=tmp_path_hf(tiny_checkpoint))
+        assert models and models[0]["source"] == "hf-cache"
+        snap = native.resolve_local_model(
+            models[0]["model"], hf_cache=tmp_path_hf(tiny_checkpoint))
+        assert snap is not None and (snap / "config.json").exists()
+
+    def test_generate_offline_from_local_checkpoint(self, tiny_checkpoint,
+                                                    monkeypatch):
+        monkeypatch.setenv("HF_HOME", str(tmp_path_hf(tiny_checkpoint)))
+        from rebel_profiler.llm import native
+
+        engine = native.NativeStreamingEngine(
+            "local/tiny", limits=DEFAULT_LIMITS["mid"],
+            hf_cache=tmp_path_hf(tiny_checkpoint))
+        engine.load()
+        result = engine.generate("hello world", max_new_tokens=4)
+        assert result.engine == "native"
+        assert result.output_tokens <= 4
+        assert result.device == "cpu"
+        engine.unload()
+        assert engine.loaded is False
+
+    def test_missing_local_model_is_structured_error(self):
+        from rebel_profiler.llm import native
+
+        with pytest.raises(DependencyUnavailableError):
+            native.NativeStreamingEngine(
+                "org/never-downloaded", limits=DEFAULT_LIMITS["mid"],
+                hf_cache="/tmp/definitely-not-a-hf-cache")
+
+    def test_plane_prefers_native_for_local_models(self, tiny_checkpoint,
+                                                   monkeypatch):
+        monkeypatch.setenv("HF_HOME", str(tmp_path_hf(tiny_checkpoint)))
+        from rebel_profiler.llm import native
+        from rebel_profiler.llm.inference import ModelPlane
+
+        plane = ModelPlane(limits=DEFAULT_LIMITS["mid"])
+        model_id = native.discover_local_models(
+            hf_cache=tmp_path_hf(tiny_checkpoint))[0]["model"]
+        engine = plane.select_engine(model_id)
+        assert plane.engine_kind == "native"
+        engine.unload()
+
+
+def tmp_path_hf(checkpoint_dir):
+    """Wrap a checkpoint dir as models--local--tiny/snapshots/x layout."""
+    import shutil
+    from pathlib import Path
+
+    hf = Path(checkpoint_dir).parent / "hf"
+    snap = hf / "hub" / "models--local--tiny" / "snapshots" / "s1"
+    if not snap.exists():
+        snap.mkdir(parents=True)
+        for f in checkpoint_dir.iterdir():
+            shutil.copy2(f, snap / f.name)
+    return hf
+
+
 class TestLlmCli:
     def test_status_json(self, workspace, capsys):
         assert main([*workspace, "llm", "status", "-o", "json"]) == 0

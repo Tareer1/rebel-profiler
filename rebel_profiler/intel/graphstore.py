@@ -90,7 +90,6 @@ class RelationshipGraphStore:
             c for c in self.ledger.list(self.case_id)
             if c.state in {"open", "corroborated"}
         ]
-        host_seen = False
         for claim in claims:
             subject = claim.subject
             host_id = f"host:{subject}"
@@ -98,7 +97,6 @@ class RelationshipGraphStore:
                 host_id, self.case_id, kind="host", label=subject,
                 confidence=claim.confidence, meta={"claims": [claim.id]},
             )
-            host_seen = True
 
             if claim.kind == "ip":
                 self._attach_ip(host_id, claim)

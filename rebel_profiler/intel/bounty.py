@@ -1,0 +1,434 @@
+"""Bug-bounty triage: collected evidence → reportable findings.
+
+This is the *assessment* half of the bounty workflow. It reads nothing but the
+case's own claim ledger, so every reported item traces back to hash-chained
+evidence — no demo data, no placeholder, no invented finding, and an honest
+empty report when nothing was observed.
+
+Each observed condition is mapped to:
+
+* a vulnerability **class** and a short title,
+* an advisory **severity** and a **CWE**,
+* a **reproduce** command built from the URL the evidence actually came from,
+* a **remediation** line the program's triager can act on.
+
+Severity here is *advisory*: every program has its own taxonomy and payout
+rules, and the report says so. Missing security headers, for instance, are
+informational on most programs and only escalate when they cause concrete
+impact — the mapping below reflects that rather than inflating everything.
+"""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass, field
+
+SEVERITIES = ("informational", "low", "medium", "high", "critical")
+_SEVERITY_ORDER = {name: index for index, name in enumerate(SEVERITIES)}
+
+# Confidence floor: below this a claim is context, not a reportable finding.
+_MIN_CONFIDENCE = 0.2
+
+# A finding must still be live; contradicted/stale claims never ship.
+_LIVE_STATES = {"open", "corroborated"}
+
+
+@dataclass(frozen=True)
+class Rule:
+    """One observed check → vulnerability class mapping."""
+
+    prefix: str            # matched against the claim value's leading check
+    title: str
+    severity: str
+    cwe: str
+    remediation: str
+    reproduce: str = "curl -sSI {url}"
+    impact: str = ""
+
+
+# Check names come from intel/web.py (`_audit_*` families) — the claim value is
+# always "<check>:<detail>". Longest prefixes are matched first.
+RULES: tuple[Rule, ...] = (
+    Rule(
+        prefix="cleartext_password_form",
+        title="Password form submitted over cleartext HTTP",
+        severity="high",
+        cwe="CWE-319",
+        remediation="Serve the form and its action endpoint over HTTPS only and "
+                    "redirect HTTP to HTTPS before any credentials are entered.",
+        reproduce="curl -sS {url} | grep -iE '<form|<input[^>]+type=\"?password'",
+        impact="Credentials are transmitted unencrypted and can be read by any "
+               "on-path observer.",
+    ),
+    Rule(
+        prefix="tls:protocol",
+        title="Legacy TLS protocol version accepted",
+        severity="medium",
+        cwe="CWE-326",
+        remediation="Disable TLS 1.0/1.1 and SSLv3; require TLS 1.2+ with "
+                    "modern cipher suites.",
+        reproduce="openssl s_client -connect {host}:443 -tls1 2>/dev/null | "
+                  "grep -E 'Protocol|Cipher'",
+        impact="Deprecated protocols have known cryptographic weaknesses and "
+               "fail modern compliance baselines.",
+    ),
+    Rule(
+        prefix="header:CSP",
+        title="Missing Content-Security-Policy",
+        severity="informational",
+        cwe="CWE-693",
+        remediation="Deploy a Content-Security-Policy that disallows inline "
+                    "script and restricts script-src to trusted origins.",
+        reproduce="curl -sSI {url} | grep -i content-security-policy",
+        impact="Removes a defence-in-depth layer against cross-site scripting; "
+               "report it as a finding only when combined with an actual XSS.",
+    ),
+    Rule(
+        prefix="header:HSTS",
+        title="Missing Strict-Transport-Security",
+        severity="low",
+        cwe="CWE-319",
+        remediation="Send Strict-Transport-Security with a long max-age on all "
+                    "HTTPS responses (add includeSubDomains once verified).",
+        reproduce="curl -sSI {url} | grep -i strict-transport-security",
+        impact="Users can be downgraded to cleartext HTTP on hostile networks.",
+    ),
+    Rule(
+        prefix="header:X-Frame-Options",
+        title="Missing anti-framing header",
+        severity="informational",
+        cwe="CWE-1021",
+        remediation="Send X-Frame-Options: DENY (or a CSP frame-ancestors "
+                    "directive) on responses that must not be framed.",
+        reproduce="curl -sSI {url} | grep -iE 'x-frame-options|frame-ancestors'",
+        impact="Enables clickjacking where a sensitive action lacks other "
+               "confirmations.",
+    ),
+    Rule(
+        prefix="header:X-Content-Type-Options",
+        title="Missing X-Content-Type-Options",
+        severity="informational",
+        cwe="CWE-693",
+        remediation="Send X-Content-Type-Options: nosniff on all responses.",
+        reproduce="curl -sSI {url} | grep -i x-content-type-options",
+        impact="Browser MIME sniffing can turn an upload into script execution.",
+    ),
+    Rule(
+        prefix="header:Referrer-Policy",
+        title="Missing Referrer-Policy",
+        severity="informational",
+        cwe="CWE-200",
+        remediation="Send Referrer-Policy: strict-origin-when-cross-origin (or "
+                    "no-referrer where appropriate).",
+        reproduce="curl -sSI {url} | grep -i referrer-policy",
+        impact="URLs containing sensitive parameters leak via the Referer header.",
+    ),
+    Rule(
+        prefix="cookie:Secure",
+        title="Cookie set without the Secure flag",
+        severity="low",
+        cwe="CWE-614",
+        remediation="Set the Secure attribute on every cookie that carries "
+                    "session or identity data.",
+        reproduce="curl -sSI {url} | grep -i set-cookie",
+        impact="The cookie can be transmitted over cleartext HTTP and captured "
+               "on-path.",
+    ),
+    Rule(
+        prefix="cookie:HttpOnly",
+        title="Cookie set without the HttpOnly flag",
+        severity="low",
+        cwe="CWE-1004",
+        remediation="Set HttpOnly on session cookies so scripts cannot read them.",
+        reproduce="curl -sSI {url} | grep -i set-cookie",
+        impact="Any cross-site scripting flaw can exfiltrate the session token.",
+    ),
+    Rule(
+        prefix="cookie:SameSite",
+        title="Cookie set without SameSite",
+        severity="informational",
+        cwe="CWE-1275",
+        remediation="Set SameSite=Lax (or Strict) unless cross-site sending is "
+                    "actually required, and audit CSRF defences.",
+        reproduce="curl -sSI {url} | grep -i set-cookie",
+        impact="Raises cross-site request forgery exposure for state-changing "
+               "requests.",
+    ),
+    Rule(
+        prefix="redirect_cleartext",
+        title="Redirect to cleartext HTTP",
+        severity="low",
+        cwe="CWE-319",
+        remediation="Redirect to the https:// URL directly instead of bouncing "
+                    "through http://.",
+        reproduce="curl -sSI {url} | grep -i '^location'",
+        impact="The cleartext hop can be intercepted before the upgrade.",
+    ),
+)
+
+# Cleartext / over-exposed services seen in discovery output.
+RISKY_SERVICES: dict[str, tuple[str, str, str]] = {
+    # service name: (severity, cwe, remediation)
+    "telnet": ("medium", "CWE-319", "Replace Telnet with SSH."),
+    "ftp": ("medium", "CWE-319", "Replace FTP with SFTP/FTPS."),
+    "pop3": ("medium", "CWE-319", "Enable POP3S (implicit TLS) and disable cleartext POP3."),
+    "imap": ("medium", "CWE-319", "Enable IMAPS (implicit TLS) and disable cleartext IMAP."),
+    "rlogin": ("medium", "CWE-319", "Retire rlogin/rsh in favour of SSH."),
+    "vnc": ("medium", "CWE-284", "Restrict VNC to a management network and require "
+                                 "strong authentication."),
+    "rdp": ("informational", "CWE-284", "Restrict RDP to a management network, enable "
+                                        "NLA and MFA."),
+    "smb": ("informational", "CWE-284", "Restrict SMB to trusted segments; block at "
+                                        "the perimeter."),
+    "mongodb": ("medium", "CWE-284", "Enable authentication and never expose MongoDB "
+                                     "to untrusted networks."),
+    "redis": ("medium", "CWE-284", "Enable requirepass/ACLs and bind to trusted "
+                                   "interfaces only."),
+    "mysql": ("informational", "CWE-284", "Bind database ports to the application "
+                                          "network only."),
+    "postgresql": ("informational", "CWE-284", "Bind database ports to the application "
+                                               "network only."),
+}
+
+
+@dataclass
+class BountyFinding:
+    subject: str
+    title: str
+    severity: str
+    cwe: str
+    detail: str
+    remediation: str
+    reproduce: str
+    impact: str
+    confidence: float
+    evidence_ids: tuple[str, ...]
+    claim_ids: tuple[str, ...]
+    source: str
+    method: str
+    observed_at: float
+    url: str = ""
+
+    def as_dict(self) -> dict:
+        return {
+            "asset": self.subject,
+            "title": self.title,
+            "severity": self.severity,
+            "cwe": self.cwe,
+            "detail": self.detail,
+            "reproduce": self.reproduce,
+            "impact": self.impact,
+            "remediation": self.remediation,
+            "confidence": round(self.confidence, 4),
+            "evidence_ids": list(self.evidence_ids),
+            "claim_ids": list(self.claim_ids),
+            "source": self.source,
+            "method": self.method,
+            "observed_at": self.observed_at,
+            "url": self.url,
+        }
+
+
+@dataclass
+class BountyReport:
+    case_id: str
+    program: str
+    generated_at: float
+    findings: list[BountyFinding] = field(default_factory=list)
+    unmapped: list[dict] = field(default_factory=list)
+    stats: dict = field(default_factory=dict)
+
+    def as_dict(self) -> dict:
+        return {
+            "schema_version": 1,
+            "case_id": self.case_id,
+            "program": self.program,
+            "generated_at": self.generated_at,
+            "severity_note": ("Advisory mapping only — the program's own taxonomy "
+                              "and payout rules take precedence."),
+            "stats": self.stats,
+            "findings": [f.as_dict() for f in self.findings],
+            "unmapped_observations": self.unmapped,
+        }
+
+    def render_human(self) -> str:
+        lines = [
+            f"Bug-bounty report — case {self.case_id}",
+            f"program   : {self.program or '(not recorded)'}",
+            f"generated : {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(self.generated_at))}",
+            f"findings  : {len(self.findings)}",
+            "",
+        ]
+        if not self.findings:
+            lines.append("  No reportable findings from the collected evidence.")
+            lines.append("  Collect more in-scope data "
+                         "(bounty run / intel crawl / intel collect), then re-assess.")
+            lines.append("")
+        for finding in self.findings:
+            lines.append(f"[{finding.severity.upper()}] {finding.title}")
+            lines.append(f"  asset      : {finding.subject}")
+            lines.append(f"  cwe        : {finding.cwe}")
+            lines.append(f"  detail     : {finding.detail}")
+            lines.append(f"  reproduce  : {finding.reproduce}")
+            lines.append(f"  impact     : {finding.impact}")
+            lines.append(f"  remediation: {finding.remediation}")
+            evidence = finding.evidence_ids[0] if finding.evidence_ids else "-"
+            lines.append(f"  evidence   : {evidence} (conf={finding.confidence:.2f},"
+                         f" source={finding.source})")
+            lines.append("")
+        if self.unmapped:
+            lines.append(f"  {len(self.unmapped)} observation(s) had no vulnerability "
+                         "mapping (kept in the ledger, listed under -o json).")
+        lines.append("  Advisory severities — the program's own taxonomy wins.")
+        lines.append("  Verify evidence anytime: rebel-profiler evidence verify "
+                     f"{self.case_id}")
+        return "\n".join(lines)
+
+
+def _severity_rank(severity: str) -> int:
+    return _SEVERITY_ORDER.get(severity, 0)
+
+
+def _match_rule(value: str) -> Rule | None:
+    best: Rule | None = None
+    for rule in RULES:
+        if value.startswith(rule.prefix + ":") or value == rule.prefix:
+            if best is None or len(rule.prefix) > len(best.prefix):
+                best = rule
+    return best
+
+
+def _url_from(claim) -> str:
+    notes = getattr(claim, "notes", "") or ""
+    for part in notes.split("|"):
+        part = part.strip()
+        if part.startswith("url=") and len(part) > 4:
+            return part[4:].strip()
+    return ""
+
+
+def _host_from_url(url: str, fallback: str) -> str:
+    if "://" in url:
+        host = url.split("://", 1)[1].split("/", 1)[0]
+        if ":" in host and host.count(":") == 1:
+            host = host.split(":", 1)[0]
+        return host or fallback
+    return fallback
+
+
+def _fill(template: str, *, url: str, host: str) -> str:
+    return template.replace("{url}", url or f"https://{host}").replace("{host}", host)
+
+
+def _from_web_claim(claim) -> tuple[BountyFinding, bool]:
+    """One web_finding claim → a finding (or an unmapped observation)."""
+    value = claim.value or ""
+    rule = _match_rule(value)
+    url = _url_from(claim)
+    host = _host_from_url(url, claim.subject)
+    detail = value
+    if rule is not None and value.startswith(rule.prefix + ":"):
+        detail = value[len(rule.prefix) + 1:]
+    elif rule is not None:
+        detail = value
+
+    if rule is None:
+        return (BountyFinding(
+            subject=claim.subject, title=f"Web observation: {value.split(':', 1)[0]}",
+            severity="informational", cwe="", detail=detail,
+            remediation="Review the observation and decide whether it is "
+                        "reportable under the program's policy.",
+            reproduce=f"curl -sSI {url or 'https://' + host}",
+            impact="", confidence=claim.confidence,
+            evidence_ids=(claim.evidence_id,) if claim.evidence_id else (),
+            claim_ids=(claim.id,), source=claim.source, method=claim.method,
+            observed_at=claim.observed_at, url=url,
+        ), False)
+
+    return (BountyFinding(
+        subject=claim.subject, title=rule.title, severity=rule.severity,
+        cwe=rule.cwe, detail=detail, remediation=rule.remediation,
+        reproduce=_fill(rule.reproduce, url=url, host=host), impact=rule.impact,
+        confidence=claim.confidence,
+        evidence_ids=(claim.evidence_id,) if claim.evidence_id else (),
+        claim_ids=(claim.id,), source=claim.source, method=claim.method,
+        observed_at=claim.observed_at, url=url,
+    ), True)
+
+
+def _from_service_claim(claim) -> tuple[BountyFinding, bool]:
+    name = (claim.value or "").strip().lower().split("/")[0].split()[0]
+    spec = RISKY_SERVICES.get(name)
+    if spec is None:
+        return (BountyFinding(
+            subject=claim.subject, title=f"Exposed service: {claim.value}",
+            severity="informational", cwe="", detail=f"service {claim.value}",
+            remediation="Confirm the service is intended to be reachable from "
+                        "this network.",
+            reproduce=f"nmap -sV -p <port> {claim.subject}",
+            impact="", confidence=claim.confidence,
+            evidence_ids=(claim.evidence_id,) if claim.evidence_id else (),
+            claim_ids=(claim.id,), source=claim.source, method=claim.method,
+            observed_at=claim.observed_at,
+        ), False)
+    severity, cwe, remediation = spec
+    return (BountyFinding(
+        subject=claim.subject, title=f"Exposed {name} service", severity=severity,
+        cwe=cwe, detail=f"service {claim.value} reachable on the target",
+        remediation=remediation,
+        reproduce=f"nmap -sV -p <port> {claim.subject}",
+        impact=("Cleartext or unauthenticated exposure widens the attack surface."
+                if severity != "informational" else
+                "Exposed administrative/service port enlarges the attack surface."),
+        confidence=claim.confidence,
+        evidence_ids=(claim.evidence_id,) if claim.evidence_id else (),
+        claim_ids=(claim.id,), source=claim.source, method=claim.method,
+        observed_at=claim.observed_at,
+    ), True)
+
+
+def assess_claims(claims, *, case_id: str, program: str = "") -> BountyReport:
+    """Triage claims into a bounty report. Pure function — no network, no DB."""
+    findings: list[BountyFinding] = []
+    unmapped: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+
+    for claim in claims:
+        if claim.state not in _LIVE_STATES or claim.confidence < _MIN_CONFIDENCE:
+            continue
+        if claim.kind == "web_finding":
+            finding, mapped = _from_web_claim(claim)
+        elif claim.kind == "service":
+            finding, mapped = _from_service_claim(claim)
+        else:
+            continue
+
+        key = (finding.subject, finding.title)
+        if mapped:
+            if key in seen:
+                continue          # one finding per (asset, class)
+            seen.add(key)
+            findings.append(finding)
+        else:
+            unmapped.append({
+                "asset": finding.subject, "title": finding.title,
+                "detail": finding.detail, "claim_id": claim.id,
+                "evidence_id": claim.evidence_id,
+            })
+
+    findings.sort(key=lambda f: (-_severity_rank(f.severity), f.subject, f.title))
+    counts: dict[str, int] = {name: 0 for name in SEVERITIES}
+    for finding in findings:
+        counts[finding.severity] = counts.get(finding.severity, 0) + 1
+    return BountyReport(
+        case_id=case_id, program=program, generated_at=time.time(),
+        findings=findings, unmapped=unmapped,
+        stats={"findings": len(findings), "by_severity": counts,
+               "unmapped": len(unmapped),
+               "assets": len({f.subject for f in findings})},
+    )
+
+
+def assess(ledger, case_id: str, *, program: str = "") -> BountyReport:
+    """Triage every claim in the ledger for *case_id*."""
+    return assess_claims(ledger.list(case_id), case_id=case_id, program=program)

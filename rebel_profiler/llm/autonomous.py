@@ -31,15 +31,14 @@ every step; nothing here bypasses scope, policy or the hardware budget.
 from __future__ import annotations
 
 import json
-import time
 from dataclasses import dataclass, field
 
 from ..agent import Proposal
-from ..agent.forge import FeatureForge, ForgeFinding
-from ..agent.repair import SelfRepairSession, _fix_hint_for
+from ..agent.forge import FeatureForge
+from ..agent.repair import SelfRepairSession
 from ..core.errors import RPError, UsageError
 from ..core.redact import redact
-from ..llm.planner import LlmPlanner, build_plan_prompt
+from ..llm.planner import LlmPlanner
 
 # How many forge rounds the LLM may spend per session (bounded self-growth).
 MAX_FORGE_ROUNDS = 3
@@ -99,7 +98,9 @@ class AutonomousEngineer:
         self.goal = goal
         self.ctx = ctx
         self.db = db
-        self.model = model
+        # Model resolution: --llm flag > config profile [llm] model > "".
+        self.model = model or str(
+            (getattr(ctx, "config", None) or {}).get("llm", {}).get("model", "") or "")
         self.max_actions = max_actions
         self.max_repair_attempts = max_repair_attempts
         self.result = AutoSessionResult()

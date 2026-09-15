@@ -88,6 +88,15 @@ def read_budget(meminfo_path: str = "/proc/meminfo") -> dict:
     }
 
 
+def _wider_tier(tier: str) -> str:
+    """The next tier up — the only sanctioned way to raise a cap."""
+    try:
+        index = BUDGET_TIERS.index(tier)
+    except ValueError:
+        return BUDGET_TIERS[-1]
+    return BUDGET_TIERS[min(index + 1, len(BUDGET_TIERS) - 1)]
+
+
 def recommend(budget: dict | None = None) -> str:
     """Pick the widest tier this hardware can honestly carry."""
     budget = budget or read_budget()
@@ -149,7 +158,8 @@ class BudgetGuard:
                 action="Shorten the input or raise RP_LLM__MAX_CONTEXT_TOKENS (tighten-only in reverse is refused).",
             )
 
-    def check_model(self, model_b: float, *, compressed: bool) -> None:
+    def check_model(self, model_b: float, *, compressed: bool,
+                    cuda_required: bool = True) -> None:
         if model_b > self.limits.max_model_b:
             raise ModelBudgetError(
                 f"Model ~{model_b:g}B exceeds tier cap {self.limits.max_model_b:g}B",
@@ -162,10 +172,12 @@ class BudgetGuard:
                 reason=f"Tier '{self.limits.tier}' only allows 4/8-bit compressed models.",
                 action="Pass compression='4bit' (or '8bit') when loading.",
             )
-        if compressed and not _cuda_available():
+        if compressed and cuda_required and not _cuda_available():
             # AirLLM's block-wise compression quantizes on-device (bnb .cuda());
             # a CPU-only torch cannot even split the layers. Refuse early with
-            # an honest fix instead of a mid-load AssertionError.
+            # an honest fix instead of a mid-load AssertionError. (The native
+            # engine's own block-wise quantization is CPU-safe and passes
+            # cuda_required=False — same feature, different mechanism.)
             raise ModelBudgetError(
                 "Compression requires CUDA",
                 reason="AirLLM's 4/8-bit block-wise compression (bitsandbytes) "
@@ -185,10 +197,19 @@ class BudgetGuard:
     def check_rss(self) -> None:
         rss = self.current_rss_mb
         if rss > self.limits.max_rss_mb:
+            wider = _wider_tier(self.limits.tier)
+            if wider == self.limits.tier:
+                # Already the widest tier: the only honest fixes are lighter.
+                action = ("This is the widest tier — load a smaller or more "
+                          "aggressively quantized checkpoint.")
+            else:
+                action = ("Run at a wider tier if this machine can carry it "
+                          f"(--tier {wider}, or RP_LLM__TIER={wider}). "
+                          "RP_LLM__MAX_RSS_MB may only *lower* this ceiling.")
             raise ModelBudgetError(
                 f"LLM plane RSS {rss:.0f}MB exceeds ceiling {self.limits.max_rss_mb}MB",
                 reason="The plane must never push a low-end machine into swap.",
-                action="Unload models, lower the tier, or raise the ceiling via RP_LLM__MAX_RSS_MB.",
+                action=action,
             )
 
     def as_dict(self) -> dict:

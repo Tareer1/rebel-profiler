@@ -24,7 +24,6 @@ from __future__ import annotations
 import json
 
 from ..core.redact import redact
-from ..evidence.store import EvidenceStore  # noqa: F401 — re-export for parity
 from ..intel.claims import ClaimLedger
 from ..intel.findings import generate_report
 from ..intel.sources import SourceRegistry

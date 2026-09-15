@@ -9,9 +9,15 @@ Every daily-use command in one page. Replace `<case-id>` with your case id
 
 ```bash
 pip install -e .                                # core (stdlib-only)
-pip install 'rebel-profiler[airllm]'            # optional: local LLM (AirLLM)
-pip install 'rebel-profiler[airllm-compression]' # optional: +4/8-bit (needs CUDA)
 rebel-profiler doctor                           # health check
+
+# Local LLM engines — pick what fits your checkpoints (see docs/SETUP.md)
+pip install 'rebel-profiler[gguf]'              # GGUF files (llama.cpp/Ollama/LM Studio)
+pip install 'rebel-profiler[native]'            # HF safetensors already on disk
+pip install 'rebel-profiler[airllm]'            # airllm layer streaming
+
+rebel-profiler llm setup                        # hardware-aware install guidance
+rebel-profiler llm local                        # checkpoints on disk + run commands
 rebel-profiler llm status                       # what can THIS machine run?
 rebel-profiler llm models                       # which models fit?
 ```
@@ -65,8 +71,23 @@ rebel-profiler llm status --tier low            # pretend to be a smaller box
 rebel-profiler llm models                       # fits-this-machine shortlist
 rebel-profiler llm generate "summarize: ..." \
     --model Qwen/Qwen3-4B --max-tokens 200      # one shot; loads then unloads
+rebel-profiler llm generate "…" --model /path/to/model.gguf   # a local GGUF file
+rebel-profiler llm generate "…" --local         # best local model that fits
 rebel-profiler llm plan <case-id> "find subdomains" --model Qwen/Qwen3-4B
 ```
+
+### The LLM writes and repairs its own scripts
+
+```bash
+rebel-profiler llm script author "<goal>"       # model writes run(payload)
+rebel-profiler llm script run --once            # static gate → sandbox → result
+rebel-profiler llm script result <script-id>    # the ACTUAL returned value
+rebel-profiler llm script retry <script-id>     # feed the failure back to the model
+rebel-profiler llm script list
+```
+
+Stored, never executed at submit time; idempotent; a script gets exactly the
+reach the static gate allows — no more than a human-written one.
 
 Unattended (job files — the CLI stays tiny, the daemon gets heavy):
 
@@ -169,6 +190,59 @@ rebel-profiler ops package rebel-profiler.pyz   # offline zipapp
 rebel-profiler doctor
 ```
 
+## 9b. Authorized bug-bounty workflow
+
+A published program scope is the authorization document — import it, review,
+activate, then test strictly inside it.
+
+```bash
+rebel-profiler bounty import <case-id> scope.csv --program acme
+rebel-profiler bounty import <case-id> scope.json --program acme --activate
+rebel-profiler case scope show <case-id>          # what was imported
+rebel-profiler bounty run <case-id>               # PLAN ONLY (default)
+rebel-profiler bounty run <case-id> --execute     # scope-enforced web audit
+rebel-profiler bounty assess <case-id>            # severity + CWE + repro + fix
+rebel-profiler bounty report <case-id> -o json    # submission-ready
+```
+
+One stated goal runs the whole chain (scope → recon → assess → author →
+execute → repair → report):
+
+```bash
+rebel-profiler bounty auto <case-id> "find what you can in this scope, test it, \
+and give me a report with real results, no demos" --verbose --save
+```
+
+| Flag | Effect |
+| --- | --- |
+| `--no-author` | deterministic audit + report only (no LLM script authoring) |
+| `--max-scripts N` | cap on model-written scripts (default 3; `0` disables) |
+| `--max-repair-rounds N` | how many times a failing script goes back to the model |
+| `--max-assets N` / `--max-pages N` | bounds on the audit |
+| `--scheme http\|https` | scheme used to build seed URLs (default https) |
+| `--model <id>` | model id for authoring |
+| `--save` | write the full session JSON into the case's `reports/` |
+| `--verbose` | stream each stage to stderr as it runs |
+
+Exit `0` when there is at least one reportable finding, `1` when the report is
+empty, `2` on a usage/authorization error (e.g. the case is not ACTIVE).
+
+Accepted scope inputs: HackerOne-style JSON (`{"data": [{"attributes": …}]}`)
+or CSV export, and a plain one-target-per-line list (`!target` or `-target` for
+exclusions, `#` for comments). Non-host assets are skipped with a reason;
+assets the program marks ineligible are imported as exclusions.
+
+`bounty assess` reads only the claim ledger: advisory severity, CWE, a
+reproduction command built from the URL the evidence came from, and a fix. No
+demo data, no invented findings, and an honest empty report when nothing was
+observed.
+
+`bounty auto` authors scripts through the same gate as everything else: the
+model's source is stored (not executed) at submit time, the static AST gate and
+subprocess sandbox decide whether it runs, and the run lands as hash-chained
+evidence. With no real engine loaded, authoring is skipped and said so — the
+deterministic half still reports.
+
 ## 10. Job profiles (`--config-file`)
 
 Pin model/tier/actor settings once, reuse for every recurring job (cron,
@@ -206,8 +280,9 @@ run/work/auto` and the daemon.
 | `RP_LLM__MAX_MODEL_B` | model size cap (billions) | per tier |
 | `RP_LLM__ALLOW_GPU` | `false` = CPU/MPS placement only | true |
 | `RP_LLM__REQUIRE_COMPRESSION` | `true` = only compressed loads | per tier |
-| `RP_LLM__ENGINE` | `tiny` / `airllm` / `external` pin | auto (airllm→tiny) |
-| `RP_LLM__MODEL` | default model id | — |
+| `RP_LLM__ENGINE` | `tiny` / `gguf` / `native` / `airllm` / `external` pin | auto (best local → airllm → tiny) |
+| `RP_LLM__MODEL` | default model id (or a local `.gguf` path) | — |
+| `RP_LLM__GGUF_DIRS` | extra directories to search for GGUF files | project + usual roots |
 | `RP_LLM__API_KEY` / `_FILE` | remote provider key (opt-in only) | — |
 | `RP_LLM__API_BASE` | any OpenAI-compatible /v1 endpoint | api.openai.com |
 | `RP_ACTOR` | acting subject in audit | operator |

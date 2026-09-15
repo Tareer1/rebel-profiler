@@ -326,19 +326,65 @@ class ModelPlane:
             self._engine_kind = "external"
             self._fallback_reason = "engine=external requested (remote AI provider)"
             return engine
-        try:
-            engine = self._engine_for("airllm", model, **options)
+        if self._prefer == "gguf":
+            # Explicit GGUF pin: the caller knows the checkpoint is a gguf.
+            engine = self._engine_for("gguf", model, **options)
             engine.load()
             self.unload()
             self._engine = engine
-            self._engine_kind = "airllm"
+            self._engine_kind = "gguf"
             return engine
+        # Every failed attempt is kept, in order. Overwriting the reason with
+        # the *last* engine's failure hid the real cause: a local GGUF that
+        # tripped the budget guard reported only "airllm unavailable", so the
+        # operator was told to install a package instead of what actually
+        # happened.
+        reasons: list[str] = []
+
+        def _adopt(kind: str, engine):
+            engine.load()
+            self.unload()
+            self._engine = engine
+            self._engine_kind = kind
+            self._fallback_reason = "; ".join(reasons)
+            return engine
+
+        try:
+            # Local GGUF first when the request names a checkpoint that is
+            # already on disk: one file, already quantized, no download and no
+            # layer split. Falls through to the HF-dir engines otherwise.
+            from .gguf import resolve_local_gguf
+
+            if resolve_local_gguf(model) is not None:
+                engine = self._engine_for("gguf", model, **options)
+                return _adopt("gguf", engine)
         except Exception as exc:
             self.unload()
+            reasons.append(
+                f"gguf engine unavailable ({type(exc).__name__}: {exc})")
+        try:
+            # Native engine first when the checkpoint is ALREADY on disk:
+            # no airllm install, no download. Falls through to airllm (which
+            # may download) only when the model is not local.
+            from .native import resolve_local_model
+
+            if resolve_local_model(model) is not None:
+                engine = self._engine_for("native", model, **options)
+                return _adopt("native", engine)
+        except Exception as exc:
+            self.unload()
+            reasons.append(
+                f"native engine unavailable ({type(exc).__name__}: {exc})")
+        try:
+            engine = self._engine_for("airllm", model, **options)
+            return _adopt("airllm", engine)
+        except Exception as exc:
+            self.unload()
+            reasons.append(
+                f"airllm unavailable ({type(exc).__name__}: {exc})")
             self._fallback_reason = (
-                f"airllm unavailable ({type(exc).__name__}: {exc}); "
-                "fell back to the deterministic tiny engine"
-            )
+                "; ".join(reasons)
+                + "; fell back to the deterministic tiny engine")
             engine = self._engine_for("tiny", model)
             engine.load()
             self._engine = engine
@@ -354,6 +400,17 @@ class ModelPlane:
             engine = ExternalEngine(model, limits=self.limits,
                                     **{k: v for k, v in options.items()
                                        if k in {"api_key", "api_base", "timeout_s"}})
+        elif kind == "native":
+            from .native import NativeStreamingEngine
+
+            engine = NativeStreamingEngine(model, limits=self.limits,
+                                           budget=self.budget)
+        elif kind == "gguf":
+            from .gguf import GgufEngine
+
+            engine = GgufEngine(model, limits=self.limits, budget=self.budget,
+                                **{k: v for k, v in options.items()
+                                   if k in {"n_gpu_layers", "n_threads"}})
         else:
             engine = AirLlmEngine(model, limits=self.limits,
                                   budget=self.budget, **options)

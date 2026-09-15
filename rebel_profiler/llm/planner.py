@@ -181,8 +181,10 @@ class LlmPlanner:
     def __call__(self, view):
         prompt = build_plan_prompt(view)
         self.last_prompt = prompt
-        if self.model:
-            self.plane.select_engine(self.model)
+        # Always ensure an engine exists: with no model pinned (e.g. the model
+        # came from a config profile, not the CLI) select_engine falls back to
+        # the tier default — never generate with no engine loaded.
+        self.plane.select_engine(self.model or "")
         result = self.plane.generate(
             prompt, max_new_tokens=self.max_new_tokens)
         self.last_result = result
@@ -200,4 +202,4 @@ def _plane_from_env() -> ModelPlane:
     limits = resolve_limits()
     prefer = os.environ.get("RP_LLM__ENGINE", "").strip().lower()
     return ModelPlane(limits=limits,
-                      prefer_engine=prefer if prefer in {"tiny", "airllm", "external"} else None)
+                      prefer_engine=prefer if prefer in {"tiny", "airllm", "external", "gguf", "native"} else None)

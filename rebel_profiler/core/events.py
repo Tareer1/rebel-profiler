@@ -25,6 +25,7 @@ import urllib.error
 import urllib.request
 import uuid
 
+from ..core.errors import UsageError
 from ..core.redact import redact
 from ..evidence.audit import AuditChain
 from ..storage.database import Database

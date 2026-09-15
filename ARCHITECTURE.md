@@ -11,11 +11,16 @@ specification (PDF 2), with one guiding constraint repeated throughout:
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │ Intelligence plane          knowledge/ + intel/                  │
-│   15 domains · 50 topics · capability classes · Kali tool map     │
+│   15 domains · 81 topics · 109 techniques · 121 glossary terms    │
+│   capability classes · Kali tool map · planner context            │
 │   Source scoring · claim ledger · entity resolution · injection   │
 │   defense · collection pipeline · findings/report generator ·     │
 │   cross-domain fusion (noisy-OR, conflicts) · persistent          │
 │   relationship graph store (v3 tables + queries) · surface graph  │
+│   Program scope import (bug-bounty CSV/JSON → ordinary scope       │
+│   entries) · bounty triage (claim ledger → severity/CWE/repro) ·   │
+│   bounty session (one goal → scope/recon/assess/author/execute/    │
+│   repair/report, each stage bounded and evidenced)                 │
 │   Emits planner context; contains no authority of any kind        │
 ├──────────────────────────────────────────────────────────────────┤
 │ Agent plane                 agent/                               │
@@ -24,9 +29,14 @@ specification (PDF 2), with one guiding constraint repeated throughout:
 │   denials are feedback; sessions are capped and audited           │
 ├──────────────────────────────────────────────────────────────────┤
 │ LLM plane (planner)         llm/                                  │
-│   AirLLM-mode inference: layer-wise streaming, 4/8-bit            │
-│   compression, CPU/MPS placement, hardware budget guard,          │
-│   resident daemon offload (unload after every job).               │
+│   Five engines, one interface: gguf (single-file llama.cpp        │
+│   checkpoints), native (layer-wise streaming over on-disk         │
+│   safetensors), airllm, external (opt-in remote), tiny            │
+│   (deterministic fallback). All are local-first, CPU/MPS-friendly │
+│   and wrapped by the hardware budget guard.                       │
+│   Script plane: the LLM writes a code file → static AST gate →     │
+│   subprocess sandbox → real result, hash-chained as evidence.      │
+│   Resident daemon offload (unload after every job).                │
 │   Produces ActionRequest structures — never commands, never       │
 │   decisions. Same input is available to any frontend.             │
 ├──────────────────────────────────────────────────────────────────┤
@@ -107,12 +117,28 @@ still shows the exact argv and policy outcome.
    every job, and the deterministic tiny engine keeps every contract alive
    where weights cannot load — no silent substitution, the fallback reason
    is always recorded.
-9. **Local-first inference, opt-in remote brain**: the default engine is
-   on-device AirLLM; the only remote path is an explicitly pinned,
-   OpenAI-compatible provider whose payloads and responses are redacted.
-   Case data reaches any model exclusively through bounded, redacted data
-   packs delivered over the checksummed job-file handshake — the LLM never
-   opens the database.
+9. **Local-first inference, opt-in remote brain**: the default engines are
+   on-device (GGUF, native layer streaming, AirLLM); the only remote path is
+   an explicitly pinned, OpenAI-compatible provider whose payloads and
+   responses are redacted. Case data reaches any model exclusively through
+   bounded, redacted data packs delivered over the checksummed job-file
+   handshake — the LLM never opens the database. No engine ever downloads a
+   model uninvited, and a missing optional dependency degrades to the
+   deterministic tiny engine with the reason recorded.
+10. **One goal never widens authority**: `bounty auto` orchestrates existing
+   gated steps, it does not bypass them. The case must be ACTIVE, every asset
+   is re-validated against live scope before it is touched, scripts pass the
+   same gate as anything a human submits, and no finding is reported without
+   hash-chained evidence behind it. A stage that cannot run honestly (no
+   engine with real weights) is reported as skipped, never faked.
+11. **Model-written code is data, not authority**: a script the LLM authors
+   passes the same deterministic static gate and subprocess sandbox as a
+   human-written one, reaches no more than an adapter may, and lands as
+   hash-chained evidence. Nothing a model writes can widen its own reach.
+12. **A program's published scope is authorization**: bug-bounty scope import
+   writes ordinary scope entries — the same fail-closed engine gates every
+   subsequent check. Ineligible assets become exclusions, non-host assets are
+   skipped with a reason, and nothing is special-cased.
 
 ## Data model (per case)
 

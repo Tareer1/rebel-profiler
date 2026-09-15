@@ -13,3 +13,13 @@ venv/
 
 # design-source PDFs stay out of the repo (content is mirrored in docs/)
 pdf *
+
+# Model weights stay out of the repo: they are multi-GB and GitHub rejects
+# files over 100MB. Keep checkpoints in the HF cache or a path outside git and
+# point the tool at them (--model <path> / RP_LLM__MODEL / RP_LLM__GGUF_DIRS).
+dphn/
+models/
+*.gguf
+*.gguf.part
+*.safetensors
+*.safetensors.part

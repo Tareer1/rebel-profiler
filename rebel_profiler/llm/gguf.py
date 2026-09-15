@@ -1,0 +1,468 @@
+"""GGUF engine — run single-file quantized checkpoints through llama.cpp.
+
+GGUF is the format most operators actually have on disk: one file per model
+(llama.cpp / Ollama / LM Studio exports), already quantized by the publisher.
+It needs no Hugging Face cache layout, no layer split, and no GPU.
+
+This is the tool's third local engine and it obeys exactly the same law as the
+other two:
+
+* **local-first** — the engine never downloads. A checkpoint must already be
+  on disk (a path, or a file discovered under the usual roots). Nothing here
+  reaches the network.
+* **budget-guarded** — :class:`~rebel_profiler.llm.budget.BudgetGuard` wraps
+  construction, load and every call: tier model-size caps, the RSS ceiling and
+  the context/new-token caps all apply. A Q4/Q5/Q8 GGUF counts as *compressed*
+  (it genuinely is), so ``require_compression`` tiers accept it.
+* **honest fallback** — ``llama-cpp-python`` is optional. Missing it produces a
+  structured :class:`DependencyUnavailableError` with the exact install
+  command, never a stack trace and never a silent substitution.
+
+Quant tags are read from the filename (``Q4_K_S``, ``Q5_K_M``, ``Q8_0``,
+``IQ3_XS``, ``F16``, …) so the engine can report the checkpoint's real weight
+format and size class to the budget guard.
+"""
+
+from __future__ import annotations
+
+import gc
+import os
+import re
+import time
+from pathlib import Path
+
+from .budget import BudgetGuard, Limits
+from .inference import GenerationResult
+
+# ---------------------------------------------------------------------------
+# quant / size parsing
+
+# Trailing quantization tag on a GGUF filename stem:
+#   -Q4_K_S  _Q8_0  .f16  -IQ3_XS  -Q5_K_M
+_QUANT_RE = re.compile(
+    r"(?i)[-_.](?:iq\d+_[a-z0-9_]+|q\d+_[a-z0-9_]+|q\d+|f16|f32|bf16)$"
+)
+
+# Parameter count in the model name: 8B, 1.5B, 70B (not followed by a word char)
+_PARAM_RE = re.compile(r"(?i)(\d+(?:\.\d+)?)\s*b(?![a-z0-9_])")
+
+
+def strip_quant(name: str) -> str:
+    """Drop a trailing quantization tag from a GGUF name or stem."""
+    return _QUANT_RE.sub("", str(name))
+
+
+def parse_quant(path: str | Path) -> tuple[str, int, bool]:
+    """Return ``(tag, bits_per_weight, is_compressed)`` for a GGUF file.
+
+    Unknown/absent tags are treated as f16-class uncompressed, which is the
+    conservative choice: a tier that demands compression will refuse it rather
+    than under-report the memory it needs.
+    """
+    stem = Path(path).stem
+    match = _QUANT_RE.search(stem)
+    if not match:
+        return ("unknown", 16, False)
+    tag = match.group(0).lstrip("-._").upper()
+    if tag in {"F32"}:
+        return (tag, 32, False)
+    if tag in {"F16", "BF16"}:
+        return (tag, 16, False)
+    core = re.match(r"(IQ|Q)(\d+)", tag)
+    if core:
+        bits = int(core.group(2))
+        return (tag, bits, bits < 16)
+    return (tag, 16, False)
+
+
+def gguf_params_b(path: str | Path) -> float:
+    """Approximate parameter count (billions) for a GGUF checkpoint.
+
+    Prefers the number in the filename (``…-8B-Q4_K_S.gguf`` → 8.0). When the
+    name carries no size, it estimates from the file size and the quant's bits
+    per weight — good enough for a budget decision, never used as a claim.
+    """
+    stem = strip_quant(Path(path).stem)
+    match = _PARAM_RE.search(stem)
+    if match:
+        return float(match.group(1))
+    _, bits, _ = parse_quant(path)
+    try:
+        size = Path(path).stat().st_size
+    except OSError:
+        return 32.0
+    # bytes ≈ params × bits/8  →  params ≈ bytes × 8 / bits
+    return round(size * 8 / (max(bits, 1) * 1e9), 1)
+
+
+# ---------------------------------------------------------------------------
+# discovery: use what is already on disk, bounded, no network
+
+MAX_SCAN_DEPTH = 4
+MAX_SCAN_FILES = 200
+
+
+def default_gguf_roots() -> list[Path]:
+    """Directories searched for local GGUF checkpoints, most specific first.
+
+    ``RP_LLM__GGUF_DIRS`` (os.pathsep separated) always wins so an operator
+    can pin an arbitrary model library location.
+    """
+    roots: list[Path] = []
+    for part in (os.environ.get("RP_LLM__GGUF_DIRS") or "").split(os.pathsep):
+        part = part.strip()
+        if part:
+            roots.append(Path(part).expanduser())
+    cwd = Path.cwd()
+    roots.append(cwd)
+    for rel in ("models", "gguf", "weights", "dphn"):
+        roots.append(cwd / rel)
+    home = Path.home()
+    for rel in (".cache/llama.cpp", "models", ".lmstudio/models", ".ollama/models"):
+        roots.append(home / rel)
+
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for root in roots:
+        try:
+            key = str(root.resolve())
+        except OSError:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        if root.is_dir():
+            unique.append(root)
+    return unique
+
+
+def _walk_gguf(root: Path, *, max_depth: int = MAX_SCAN_DEPTH,
+               cap: int = MAX_SCAN_FILES) -> list[Path]:
+    """Bounded directory walk for ``*.gguf`` files (no symlink following)."""
+    found: list[Path] = []
+    stack: list[tuple[Path, int]] = [(root, 0)]
+    scanned = 0
+    while stack and len(found) < cap and scanned < cap * 20:
+        directory, depth = stack.pop()
+        try:
+            entries = list(os.scandir(directory))
+        except OSError:
+            continue
+        for entry in entries:
+            scanned += 1
+            name = entry.name
+            if name.startswith("."):
+                continue
+            try:
+                if entry.is_file() and name.lower().endswith(".gguf"):
+                    found.append(Path(entry.path))
+                elif entry.is_dir() and depth < max_depth:
+                    stack.append((Path(entry.path), depth + 1))
+            except OSError:
+                continue
+    return found
+
+
+def discover_local_gguf(*, roots: list[str | Path] | None = None,
+                        max_depth: int = MAX_SCAN_DEPTH) -> list[dict]:
+    """List GGUF checkpoints already on this machine (bounded, offline)."""
+    search = [Path(r).expanduser() for r in roots] if roots else default_gguf_roots()
+    rows: list[dict] = []
+    seen: set[str] = set()
+    for root in search:
+        if not root.is_dir():
+            continue
+        for path in _walk_gguf(root, max_depth=max_depth):
+            try:
+                key = str(path.resolve())
+            except OSError:
+                continue
+            if key in seen:
+                continue
+            seen.add(key)
+            tag, bits, compressed = parse_quant(path)
+            try:
+                size_bytes = path.stat().st_size
+            except OSError:
+                size_bytes = 0
+            rows.append({
+                "path": str(path),
+                "name": path.name,
+                "quant": tag,
+                "quant_bits": bits,
+                "compressed": compressed,
+                "params_b": gguf_params_b(path),
+                "size_gb": round(size_bytes / (1024 ** 3), 2),
+                "engine": "gguf",
+            })
+    rows.sort(key=lambda r: (r["name"].lower(), r["path"]))
+    return rows
+
+
+def _norm(text: str) -> str:
+    """Lowercase alphanumeric key for tolerant name matching."""
+    return re.sub(r"[^a-z0-9]", "", str(text).lower())
+
+
+def resolve_local_gguf(model: str | Path, *, roots: list[str | Path] | None = None,
+                       max_depth: int = MAX_SCAN_DEPTH) -> Path | None:
+    """Find the on-disk GGUF that *model* names — or ``None``.
+
+    Accepts a direct path (``…/model.gguf``), a directory holding ggufs, or a
+    model id/name (``dphn/Dolphin3.0-Llama3.1-8B-GGUF``) matched against the
+    discovered filenames with the quant tag and punctuation removed. Matching
+    is deliberately conservative so an unrelated local model is never picked
+    up for an explicit request.
+    """
+    requested = Path(str(model)).expanduser()
+    if requested.is_file() and requested.suffix.lower() == ".gguf":
+        return requested
+    if requested.is_dir():
+        hits = sorted(requested.glob("*.gguf"))
+        if hits:
+            return hits[0]
+    key = _norm(strip_quant(requested.name))
+    if len(key) < 4:
+        return None
+    for row in discover_local_gguf(roots=roots, max_depth=max_depth):
+        cand = Path(row["path"])
+        cand_key = _norm(strip_quant(cand.stem))
+        if len(cand_key) < 4:
+            continue
+        if key in cand_key or cand_key in key:
+            return cand
+    return None
+
+
+# ---------------------------------------------------------------------------
+# the engine
+
+
+def _require_llama_cpp():
+    try:
+        import llama_cpp  # noqa: PLC0415 — heavy import, only when needed
+    except ImportError as exc:
+        from ..core.errors import DependencyUnavailableError
+
+        raise DependencyUnavailableError(
+            "The llama-cpp-python package is not installed",
+            reason="GGUF checkpoints are executed by llama.cpp; the Python "
+                   "binding is an optional dependency.",
+            action="pip install llama-cpp-python   (or run "
+                   "'rebel-profiler llm setup' for this machine's exact "
+                   "install command)",
+        ) from exc
+    return llama_cpp
+
+
+class GgufEngine:
+    """llama.cpp-backed engine for single-file quantized checkpoints."""
+
+    kind = "gguf"
+
+    def __init__(self, model: str | Path, *, limits: Limits, budget: dict | None = None,
+                 n_gpu_layers: int | None = None, n_threads: int | None = None,
+                 **_options) -> None:
+        _require_llama_cpp()   # structured error up front, not mid-load
+        from ..core.errors import DependencyUnavailableError
+
+        self.limits = limits
+        self.guard = BudgetGuard(limits)
+        self.requested = str(model)
+        resolved = resolve_local_gguf(model)
+        if resolved is None:
+            raise DependencyUnavailableError(
+                f"No GGUF checkpoint on disk for '{model}'",
+                reason="The GGUF engine is local-only: it never downloads a "
+                       "model, and no on-disk file matched this name.",
+                action="Pass the path directly (--model /path/to/model.gguf), "
+                       "or set RP_LLM__GGUF_DIRS to your model directory.",
+            )
+        self.path = resolved
+        self.model_id = str(resolved)
+        tag, bits, compressed = parse_quant(resolved)
+        self.quant = tag
+        self.quant_bits = bits
+        self.compressed = compressed
+        self.params_b = gguf_params_b(resolved)
+        # llama.cpp dequantizes on the fly: quantized GGUF is CPU-safe, so the
+        # budget guard's CUDA requirement does not apply (same rule as native).
+        self.guard.check_model(self.params_b, compressed=compressed,
+                              cuda_required=False)
+        self._n_gpu_layers = n_gpu_layers
+        self._n_threads = n_threads
+        self._llm = None
+        self.last_device = "cpu"
+        self.profile: list[dict] = []
+
+    # -- placement ------------------------------------------------------------
+
+    def _gpu_layers(self) -> int:
+        """Offload every layer only when the budget allows AND llama.cpp can."""
+        if self._n_gpu_layers is not None:
+            return int(self._n_gpu_layers)
+        if not self.limits.allow_gpu:
+            return 0
+        try:
+            import llama_cpp  # noqa: PLC0415 — optional
+
+            probe = getattr(getattr(llama_cpp, "llama_cpp", None),
+                            "llama_supports_gpu_offload", None)
+            if probe is not None and probe():
+                return -1
+        except Exception:
+            pass
+        return 0
+
+    # -- lifecycle ------------------------------------------------------------
+
+    def load(self) -> None:
+        if self._llm is not None:
+            return
+        self.guard.check_rss()
+        llama_cpp = _require_llama_cpp()
+        kwargs: dict = {
+            "model_path": str(self.path),
+            "n_ctx": int(self.limits.max_context_tokens),
+            "n_threads": int(self._n_threads or os.cpu_count() or 4),
+            "verbose": False,
+        }
+        gpu_layers = self._gpu_layers()
+        if gpu_layers:
+            kwargs["n_gpu_layers"] = gpu_layers
+        try:
+            self._llm = llama_cpp.Llama(**kwargs)
+        except Exception as exc:  # structured failure, never a stack-trace dump
+            self.unload()
+            from ..core.errors import DependencyUnavailableError
+
+            raise DependencyUnavailableError(
+                f"llama.cpp could not load '{self.path.name}'",
+                reason=f"{type(exc).__name__}: {exc}",
+                action="Check the file is a complete GGUF, that the machine "
+                       "has RAM for its size class, and that llama-cpp-python "
+                       "was built for this platform.",
+            ) from exc
+        self.last_device = "gpu" if gpu_layers else "cpu"
+        self.guard.check_rss()
+
+    def unload(self) -> None:
+        if self._llm is not None:
+            self._llm = None
+        gc.collect()
+
+    @property
+    def loaded(self) -> bool:
+        return self._llm is not None
+
+    # -- generation -----------------------------------------------------------
+
+    def _tokenize(self, text: str) -> list[int]:
+        try:
+            return list(self._llm.tokenize(text.encode("utf-8"), add_bos=False))
+        except Exception:
+            return []
+
+    def _fit_input(self, prompt: str) -> tuple[str, bool]:
+        """Truncate the prompt to the tier's context ceiling (bounded input)."""
+        ids = self._tokenize(prompt)
+        if not ids or len(ids) <= self.limits.max_context_tokens:
+            return prompt, False
+        keep = max(1, self.limits.max_context_tokens - 8)
+        try:
+            fitted = self._llm.detokenize(ids[:keep]).decode("utf-8", "replace")
+        except Exception:
+            fitted = prompt[: keep * 4]
+        return fitted, True
+
+    def generate(self, prompt: str, *, max_new_tokens: int | None = None,
+                 temperature: float = 0.2) -> GenerationResult:
+        self.load()
+        self.guard.check_rss()
+        started = time.time()
+        fitted, truncated = self._fit_input(prompt)
+        ids = self._tokenize(fitted)
+        self.guard.check_context(len(ids))
+        new_tokens = min(max_new_tokens or self.limits.max_new_tokens,
+                         self.limits.max_new_tokens)
+        self.guard.check_generate(new_tokens)
+        try:
+            out = self._llm.create_completion(
+                fitted,
+                max_tokens=new_tokens,
+                temperature=max(0.0, float(temperature)),
+                top_p=0.95,
+                repeat_penalty=1.05,
+                echo=False,
+            )
+            choice = (out.get("choices") or [{}])[0]
+            text = choice.get("text", "")
+            usage = out.get("usage") or {}
+        except Exception as exc:
+            from ..core.errors import DependencyUnavailableError
+
+            raise DependencyUnavailableError(
+                "llama.cpp generation failed",
+                reason=f"{type(exc).__name__}: {exc}",
+                action="Reduce max_new_tokens/context, or re-run with the "
+                       "tiny engine.",
+            ) from exc
+        elapsed = time.time() - started
+        self.profile.append({"step": len(self.profile), "ms": round(elapsed * 1000, 1)})
+        self.guard.check_rss()
+        return GenerationResult(
+            text=text, engine="gguf", model=self.model_id,
+            input_tokens=int(usage.get("prompt_tokens", len(ids))),
+            output_tokens=int(usage.get("completion_tokens", 0)),
+            elapsed_s=elapsed,
+            peak_rss_mb=self.guard.peak_rss_mb,
+            compressed=self.compressed,
+            truncated=truncated,
+            device=self.last_device,
+        )
+
+    # -- chat template + profiling -------------------------------------------
+
+    def chat_prompt(self, system: str, user: str) -> str:
+        """Format a chat prompt for the checkpoint family (best effort)."""
+        name = self.path.name.lower()
+        # Dolphin 3.0 (a Llama 3.1 finetune) and Qwen both use ChatML.
+        if "dolphin" in name or "qwen" in name:
+            return (f"<|im_start|>system\n{system}<|im_end|>\n"
+                    f"<|im_start|>user\n{user}<|im_end|>\n"
+                    f"<|im_start|>assistant\n")
+        if "llama" in name:
+            return (f"<|start_header_id|>system<|end_header_id|>\n\n{system}"
+                    f"<|eot_id|>\n<|start_header_id|>user<|end_header_id|>\n\n"
+                    f"{user}<|eot_id|>\n<|start_header_id|>assistant"
+                    f"<|end_header_id|>\n\n")
+        if "gemma" in name:
+            return (f"<start_of_turn>user\n{user}<end_of_turn>\n"
+                    f"<start_of_turn>model\n")
+        if "mistral" in name or "mixtral" in name:
+            return f"[INST] {user} [/INST]"
+        if "phi" in name:
+            return (f"<|system|>\n{system}<|end|>\n<|user|>\n{user}<|end|>\n"
+                    f"<|assistant|>\n")
+        return f"{system}\n\n{user}\n"
+
+    def profiling_summary(self) -> dict:
+        if not self.profile:
+            return {}
+        total = sum(p["ms"] for p in self.profile)
+        return {"steps": len(self.profile), "total_ms": round(total, 1),
+                "avg_ms": round(total / len(self.profile), 1),
+                "device": self.last_device, "quant": self.quant}
+
+    def info(self) -> dict:
+        return {
+            "engine": "gguf",
+            "model": self.model_id,
+            "path": str(self.path),
+            "quant": self.quant,
+            "quant_bits": self.quant_bits,
+            "compressed": self.compressed,
+            "params_b": self.params_b,
+            "device": self.last_device,
+            "chat_template": self.path.name.lower(),
+        }

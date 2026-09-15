@@ -2,6 +2,8 @@
 
 **Kali Linux Cybersecurity Intelligence & Authorized Security Operations Framework**
 
+Made by **REBEL** · Licensed under the [MIT License](LICENSE)
+
 Rebel Profiler turns natural-language investigation goals into *controlled,
 authorized, evidence-backed* security operations. It is built for Kali Linux
 and follows one non-negotiable design law:
@@ -127,7 +129,26 @@ rebel-profiler llm daemon                 # claim → generate → UNLOAD the mo
 # poll (SYN) → claim (SYN-ACK) → result (ACK); scope re-checked client-side
 rebel-profiler browser serve <case-id>    # localhost bridge for the extension
 
-# 18. Health check
+# 18. Easy setup: what this machine needs, and how to run what you already have
+rebel-profiler llm setup                   # hardware + per-engine install commands
+rebel-profiler llm local                   # every checkpoint on disk + fit verdict
+rebel-profiler llm generate "…" --local    # use the best local model that fits
+
+# 19. Authorized bug-bounty workflow (a published program scope IS the
+#     authorization; it becomes ordinary scope entries, nothing is special-cased)
+rebel-profiler bounty import <case-id> scope.csv --program acme
+rebel-profiler case activate <case-id>
+rebel-profiler bounty run <case-id>              # plan-only: what WOULD be audited
+rebel-profiler bounty run <case-id> --execute    # audit every in-scope asset
+rebel-profiler bounty assess <case-id>           # severity + CWE + repro + fix
+rebel-profiler bounty report <case-id> -o json   # submission-ready
+
+# ...or state the whole thing as one goal and let the chain run
+rebel-profiler bounty auto <case-id> \
+    "this scope came from HackerOne — find what you can, test it, and give me \
+     a report with real results, no demos"
+
+# 20. Health check
 rebel-profiler doctor
 ```
 
@@ -177,6 +198,43 @@ static gate (no subprocess/socket/os/eval/open reach), a sandbox test of the
 argv builder, HMAC signing before registration. The same loop serves the LLM
 plane: missing planner capabilities become forged adapters instead of shell
 escape hatches.
+
+### Engines: use the checkpoint you already have
+
+Five engines sit behind one interface, and none of them ever downloads a model
+uninvited. `rebel-profiler llm setup` prints this machine's tier and the exact
+install command for each; `llm local` lists what is already on disk.
+
+| Engine | Runs | Needs |
+|--------|------|-------|
+| `gguf` | one GGUF file (llama.cpp / Ollama / LM Studio exports) | `llama-cpp-python` |
+| `native` | HF safetensors checkpoints already in the local cache | `torch` |
+| `airllm` | AirLLM layer streaming, AutoModel across families | `airllm` + `torch` |
+| `external` | an OpenAI-compatible endpoint, explicitly pinned | API key |
+| `tiny` | nothing — deterministic fallback, never hallucinates | (built in) |
+
+```bash
+rebel-profiler llm setup                     # hardware-aware guidance
+rebel-profiler llm local                     # checkpoints on disk + run commands
+rebel-profiler llm generate "…" --model /path/to/model.gguf
+rebel-profiler llm generate "…" --local      # best local model that fits the tier
+```
+
+GGUF discovery is bounded and offline (`RP_LLM__GGUF_DIRS`, the project tree,
+and the usual llama.cpp / Ollama / LM Studio / HF roots). The quantization tag
+is read from the filename (`Q4_K_S` → 4-bit compressed, `F16` → uncompressed)
+so the budget guard sees the model's real weight format, and name matching is
+deliberately conservative: a local checkpoint is **never** silently substituted
+for a different model you asked for.
+
+**The LLM writes its own scripts, and repairs them.** `llm script author
+"<goal>"` has the model write a `run(payload)` script; the file is stored, not
+executed. The daemon then runs it through the static AST gate and a subprocess
+sandbox, and writes the *actual* returned value plus stdout as evidence. When a
+script fails or is rejected, `llm script retry <id>` feeds the error and the
+tool's fix hint back to the model and re-submits the corrected source — through
+the same gate. Nothing a model writes ever gets more reach than a human-written
+script.
 
 ### The Autonomous Engineer (`agent auto`)
 
@@ -372,12 +430,74 @@ tamper-verified.
   (unknown action or undeclared param = structured rejection, never
   execution).
 
+### The bug-bounty workflow
+
+A published program scope *is* the authorization document, so it plugs straight
+into the scope engine rather than bypassing it:
+
+```bash
+rebel-profiler bounty import <case-id> scope.csv --program acme
+#   → in-scope assets become scope entries, the program is recorded as the
+#     authorization source, ineligible assets become exclusions, and non-host
+#     assets (source repos, app-store IDs, ASNs) are skipped with a reason
+rebel-profiler case activate <case-id>
+rebel-profiler bounty run <case-id>              # PLAN ONLY by default
+rebel-profiler bounty run <case-id> --execute    # scope-enforced web audit
+rebel-profiler bounty assess <case-id>
+rebel-profiler bounty report <case-id> -o json
+```
+
+#### One goal in, an evidenced report out
+
+Stating the goal in plain language runs the whole chain, LLM included:
+
+```bash
+rebel-profiler bounty auto <case-id> "find what you can in this scope, test it, \
+and give me a report with real results, no demos" --verbose --save
+```
+
+    SCOPE    the case's authorized assets, re-validated against live scope
+    RECON    scope-enforced web audit of every in-scope asset
+    ASSESS   triage the collected evidence into reportable findings
+    AUTHOR   the model decides which scripts the goal still needs and writes
+             them (stored, never executed at submission time)
+    EXECUTE  the script plane's static gate + sandbox run them and record the
+             real outcome — return value, stdout, timings, or a real failure
+    REPAIR   failures and gate rejections go back to the model, bounded
+    REPORT   severity + CWE + reproduction + remediation, evidence-backed
+
+A script the model writes reaches exactly what the static gate allows (no
+network, no filesystem, no process access), so authoring adds *analysis* over
+the evidence — never new reach. `--max-scripts`, `--max-repair-rounds` and
+`--no-author` bound the run; `--save` writes the full session JSON into the
+case. When no engine with real weights is loaded the session says so, skips
+authoring, and still delivers the deterministic audit and report — it never
+substitutes a placeholder script and calls it a result.
+
+`bounty assess` is triage, not magic: it reads **only** the case's claim
+ledger, maps each observed condition to a vulnerability class with an advisory
+severity, CWE, a reproduction command built from the URL the evidence actually
+came from, and a remediation line — and it says so when there is nothing to
+report. Observations it cannot classify are listed as unmapped instead of being
+inflated into findings. Every reported item traces to hash-chained evidence you
+can re-verify with `evidence verify`.
+
+What it deliberately is not: it does not build exploits, does not brute-force
+credentials, and does not generate functional malware. The malware domain in
+this tool is analysis-only, and the detection lab produces benign artifacts
+(EICAR test files, canaries, IoC bundles, YARA rules) — the blue-team half.
+Severities are advisory; the program's own taxonomy governs payout.
+
 ## Development
 
 ```bash
-python3 -m pytest tests/ -q      # 483 tests
+python3 -m pytest tests/ -q      # full suite
 python3 -m rebel_profiler.cli.main doctor
 ```
+
+One-time setup on a fresh machine is documented end to end in
+[docs/SETUP.md](docs/SETUP.md), and `rebel-profiler llm setup` prints the
+machine-specific install commands.
 
 ## Status
 
@@ -389,4 +509,11 @@ bridge, Feature Forge, complaint packages) and QA acceptance. See
 
 **Use only on systems you are explicitly authorized to assess.** The tool
 enforces scope and policy mechanically, but authorization documents, legal
-review and operational competence remain the operator's responsibility.
+review and operational competence remain the operator's responsibility. For
+bug-bounty work that means staying inside the program's published scope and
+per-asset instructions: rate limits, no denial-of-service, no data
+exfiltration, and no touching anything the program has not listed.
+
+## License
+
+MIT — see [LICENSE](LICENSE). Made by REBEL.
