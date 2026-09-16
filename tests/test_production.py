@@ -36,10 +36,11 @@ def make_scope(case_id="case1"):
     return engine
 
 
-def make_broker(db, *, queue=False, approve=None):
+def make_broker(db, *, queue=False, approve=None, runner=None):
     return ExecutionBroker(
         db, scope_engine=make_scope(), approve=approve,
         queue_on_approval_refusal=queue,
+        runner=runner or (lambda argv: (0, "ok\n", "")),
     )
 
 

@@ -21,6 +21,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The gated adapters shell out to whitelisted binaries; doctor asserts
+      # they exist, so the CI runner must carry them like a Kali box would.
+      - name: Install whitelisted tool binaries (nmap, whois)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends nmap whois
+
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
@@ -60,6 +67,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # Doctor's tool check must pass here too: same whitelist, same reason.
+      - name: Install whitelisted tool binaries (nmap, whois)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends nmap whois
 
       - name: Set up Python
         uses: actions/setup-python@v5
