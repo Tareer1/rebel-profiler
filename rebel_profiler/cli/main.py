@@ -12,6 +12,7 @@ import argparse
 import csv
 import io
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -1382,6 +1383,8 @@ def cmd_agent_chat(ctx: AppContext, args: argparse.Namespace) -> int:
             limits=resolve_limits(),
             prefer_engine=prefer if prefer in {"tiny", "airllm", "external", "gguf", "native"} else None)
         try:
+            if plane.engine is None:
+                plane.select_engine(_hermes_model_pin(ctx, args))
             loop = HermesAgentLoop(
                 rec["id"], args.goal, plane=plane,
                 broker=ctx.broker(db), evidence=ctx.evidence_store(db, rec["id"]),
@@ -1394,6 +1397,13 @@ def cmd_agent_chat(ctx: AppContext, args: argparse.Namespace) -> int:
         return EXIT_SUCCESS
     finally:
         db.close()
+
+
+def _hermes_model_pin(ctx, args) -> str:
+    """Model pin for Hermes: --llm flag > RP_LLM__MODEL > config profile."""
+    return (str(getattr(args, "llm", "") or "")
+            or os.environ.get("RP_LLM__MODEL", "").strip()
+            or str(_cfg_get(ctx.config, "llm.model", "") or ""))
 
 
 def _hermes_repl_plane():
@@ -1425,7 +1435,7 @@ def _cmd_agent_chat_repl(ctx: AppContext, args: argparse.Namespace,
         # Select only when the plane has no engine yet — a caller (or test
         # double) may have pinned one deliberately.
         if plane.engine is None:
-            plane.select_engine(str(getattr(args, "llm", "") or ""))
+            plane.select_engine(_hermes_model_pin(ctx, args))
         if isinstance(plane.engine, TinyLlmEngine):
             from ..core.errors import DependencyUnavailableError
 
@@ -1822,9 +1832,12 @@ def cmd_llm(ctx: AppContext, args: argparse.Namespace) -> int:
                               config=ctx.config)
 
     def _model() -> str:
-        # Model precedence: --model flag > config profile [llm] model > default.
-        return getattr(args, "model", "") or str(
-            _cfg_get(ctx.config, "llm.model", "") or "") or "Qwen/Qwen3-4B"
+        # Model precedence: --model flag > RP_LLM__MODEL env > config profile
+        # [llm] model > default.
+        return (str(getattr(args, "model", "") or "")
+                or os.environ.get("RP_LLM__MODEL", "").strip()
+                or str(_cfg_get(ctx.config, "llm.model", "") or "")
+                or "Qwen/Qwen3-4B")
 
     if args.llm_command == "status":
         budget = read_budget()
@@ -2887,7 +2900,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_lgen = llm_subs.add_parser("generate", parents=[sub_common],
                                  help="one bounded generation (engine loads and unloads)")
     p_lgen.add_argument("prompt")
-    p_lgen.add_argument("--model", default="Qwen/Qwen3-4B")
+    p_lgen.add_argument("--model", default="",
+                        help="model id (default: RP_LLM__MODEL / config / Qwen/Qwen3-4B)")
     p_lgen.add_argument("--max-tokens", type=int, default=None)
     p_lgen.add_argument("--tier", default=None, choices=list(_llm_tiers()))
     p_lgen.add_argument("--engine", default=None,

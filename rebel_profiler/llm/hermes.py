@@ -343,6 +343,14 @@ class HermesAgentLoop:
                         action="pip install 'rebel-profiler[airllm]' (or gguf/native), "
                                "or use 'agent run --plan' for the deterministic path.",
                     )
+            # Last turn: force a final answer — one more tool call would have
+            # no turn left to react to its result, so ask for plain text now.
+            if turn == self.max_turns:
+                messages.append({
+                    "role": "user",
+                    "content": ("Turn budget exhausted: reply with your FINAL "
+                                "ANSWER in plain text — no tool call."),
+                })
             prompt = render_chatml(messages)
             result = self.plane.generate(prompt, max_new_tokens=self.max_new_tokens)
             reply = result.text
@@ -364,6 +372,13 @@ class HermesAgentLoop:
                                 "or your final answer."),
                 })
                 continue
+            if turn == self.max_turns:
+                # It answered the forced-final prompt with a tool call anyway:
+                # keep the call's payload but refuse to execute on credit.
+                final_answer = (
+                    "(turn budget exhausted before this call could execute — "
+                    "inspect the transcript)")
+                break
 
             call = calls[0]   # Hermes discipline: one call per turn
             name = call["name"]

@@ -229,12 +229,31 @@ class TestHermesAgentLoop:
         loop, _ = make_loop([call] * 50, env, max_turns=3)
         report = loop.run()
         assert report["turns_used"] == 3
-        assert len(report["calls"]) == 3
+        assert len(report["calls"]) == 2   # the last call lands on the forced-final turn → not executed
 
     def test_transcript_is_redacted_and_bounded(self, env):
         loop, _ = make_loop(["done"], env)
         report = loop.run()
         assert report["transcript"][0]["reply"] == "done"
+
+    def test_last_turn_forces_a_final_answer(self, env):
+        """A model that keeps calling tools gets one forced-final prompt."""
+        call = ('<tool_call>{"name": "echo", "arguments": '
+                '{"target": "h1.lab.example.test"}}</tool_call>')
+        loop, plane = make_loop([call] * 10, env, max_turns=3)
+        report = loop.run()
+        # turn 3's prompt contained the forced-final instruction
+        assert "FINAL ANSWER" in plane.prompts[2]
+        assert report["final_answer"]
+
+    def test_tool_call_on_forced_final_turn_is_not_executed(self, env):
+        call = ('<tool_call>{"name": "echo", "arguments": '
+                '{"target": "h1.lab.example.test"}}</tool_call>')
+        loop, _ = make_loop([call] * 10, env, max_turns=2)
+        report = loop.run()
+        assert report["turns_used"] == 2
+        assert len(report["calls"]) == 1   # only the first-turn call ran
+        assert "turn budget exhausted" in report["final_answer"]
 
     def test_report_fields(self, env):
         loop, _ = make_loop(["finished"], env)
