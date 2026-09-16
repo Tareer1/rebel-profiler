@@ -618,6 +618,8 @@ def cmd_agent(ctx: AppContext, args: argparse.Namespace) -> int:
 
     if args.agent_command == "auto":
         return cmd_agent_auto(ctx, args)
+    if args.agent_command == "chat":
+        return cmd_agent_chat(ctx, args)
     rec = ctx.find_case(args.case_id)
     db = ctx.open_case(rec["id"])
     try:
@@ -1358,6 +1360,35 @@ def cmd_agent_auto(ctx: AppContext, args: argparse.Namespace) -> int:
         )
         report = engineer.run()
         emit({"human": report["report_human"], "data": report}, args.output)
+        return EXIT_SUCCESS
+    finally:
+        db.close()
+
+
+def cmd_agent_chat(ctx: AppContext, args: argparse.Namespace) -> int:
+    """The Hermes agent: ChatML tool-calling loop (one <tool_call> per turn)."""
+    from ..llm.inference import ModelPlane
+    from ..llm.planner import _plane_from_env
+    from ..llm.budget import resolve_limits
+    from ..llm.hermes import HermesAgentLoop, render_human
+
+    rec = ctx.find_case(args.case_id)
+    db = ctx.open_case(rec["id"])
+    try:
+        prefer = os.environ.get("RP_LLM__ENGINE", "").strip().lower()
+        plane = ModelPlane(
+            limits=resolve_limits(),
+            prefer_engine=prefer if prefer in {"tiny", "airllm", "external", "gguf", "native"} else None)
+        try:
+            loop = HermesAgentLoop(
+                rec["id"], args.goal, plane=plane,
+                broker=ctx.broker(db), evidence=ctx.evidence_store(db, rec["id"]),
+                db=db, max_turns=args.max_turns,
+            )
+            report = loop.run()
+        finally:
+            plane.unload()   # the CLI process never stays heavy
+        emit({"human": render_human(report), "data": report}, args.output)
         return EXIT_SUCCESS
     finally:
         db.close()
@@ -2673,6 +2704,12 @@ def build_parser() -> argparse.ArgumentParser:
                          help="model for planning/repair (AirLLM local by default; RP_LLM__ENGINE=external for a provider)")
     p_aauto.add_argument("--max-actions", type=int, default=12)
     p_aauto.add_argument("--max-repair-attempts", type=int, default=2)
+    p_achat = agent_subs.add_parser("chat", parents=[sub_common],
+                                    help="Hermes agent: ChatML tool-calling loop (<tools> system prompt, one <tool_call> per turn)")
+    p_achat.add_argument("case_id")
+    p_achat.add_argument("goal")
+    p_achat.add_argument("--max-turns", type=int, default=8,
+                         help="bounded agentic turns (default 8)")
     p_awrk = agent_subs.add_parser("work", parents=[sub_common], help="self-repair session: work list → error log → revise → asks you")
     p_awrk.add_argument("case_id")
     p_awrk.add_argument("goal")

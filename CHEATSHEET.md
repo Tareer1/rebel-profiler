@@ -57,6 +57,8 @@ RP_LLM__ENGINE=external RP_LLM__API_KEY=sk-... \
 Manual/surgical modes:
 
 ```bash
+rebel-profiler agent chat <case-id> "<goal>"                      # Hermes loop: one <tool_call> per turn
+rebel-profiler agent chat <case-id> "<goal>" --max-turns 12
 rebel-profiler agent run <case-id> "<goal>" --llm Qwen/Qwen3-4B   # LLM plans once
 rebel-profiler agent run <case-id> "<goal>" \
     --plan "passive-dns:target.com:record_type=A;whois-lookup:target.com"

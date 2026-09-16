@@ -236,6 +236,23 @@ tool's fix hint back to the model and re-submits the corrected source — throug
 the same gate. Nothing a model writes ever gets more reach than a human-written
 script.
 
+### The Hermes Agent (`agent chat`)
+
+The agentic chat pattern popularized by the Hermes fine-tunes: the model
+sees its tools in a `<tools>` block inside a ChatML system message and
+drives itself one `<tool_call>` at a time — think, call, read the gated
+result, adapt — until it answers in plain text:
+
+```
+rebel-profiler agent chat <case-id> "figure out what runs on lab.example.test"
+```
+
+Each turn: `<|im_start|>` ChatML in → one `<tool_call>{"name", "arguments"}`
+out → the call passes the broker's six gates → the redacted result returns
+as a `tool` role `<tool_response>`. Every executed call is hash-chained
+evidence, exactly like `agent run`. Bounded by `--max-turns` (default 8);
+no weights loaded → a structured refusal, never a hallucinated session.
+
 ### The Autonomous Engineer (`agent auto`)
 
 One command, the LLM does the rest — repair and extend the tool itself:
