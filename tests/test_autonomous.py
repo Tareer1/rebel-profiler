@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 
 import pytest
 
@@ -145,6 +146,27 @@ def workspace(tmp_path, monkeypatch):
 
 
 class TestAgentAutoCli:
+    @pytest.fixture(autouse=True)
+    def _no_real_airllm(self, monkeypatch):
+        """agent auto must never start a real model download in tests."""
+        try:
+            import airllm  # noqa: F401
+        except ImportError:
+            yield
+            return
+        import types
+
+        fake = types.ModuleType("airllm")
+
+        class _FakeAutoModel:
+            @staticmethod
+            def from_pretrained(*_a, **_kw):
+                raise RuntimeError("stubbed: no downloads in tests")
+
+        fake.AutoModel = _FakeAutoModel
+        monkeypatch.setitem(sys.modules, "airllm", fake)
+        yield
+
     def test_auto_requires_case(self, workspace, capsys):
         rc = main([*workspace, "agent", "auto", "ghost", "goal", "-o", "json"])
         assert rc != 0

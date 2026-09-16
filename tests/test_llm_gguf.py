@@ -223,6 +223,24 @@ class TestPlaneSelection:
     def test_unrelated_model_still_falls_back_to_tiny(self, monkeypatch, model_file):
         # a local gguf must never hijack an explicit request for another model
         monkeypatch.setitem(sys.modules, "llama_cpp", None)
+        # also stub airllm when installed: without the stub select_engine
+        # would start a REAL model download for the Qwen repo id here
+        try:
+            import airllm  # noqa: F401
+        except ImportError:
+            pass
+        else:
+            import types
+
+            fake = types.ModuleType("airllm")
+
+            class _FakeAutoModel:
+                @staticmethod
+                def from_pretrained(*_a, **_kw):
+                    raise RuntimeError("stubbed: no downloads in tests")
+
+            fake.AutoModel = _FakeAutoModel
+            monkeypatch.setitem(sys.modules, "airllm", fake)
         plane = ModelPlane(limits=DEFAULT_LIMITS["mid"])
         plane.select_engine("Qwen/Qwen3-4B")
         assert plane.engine_kind == "tiny"

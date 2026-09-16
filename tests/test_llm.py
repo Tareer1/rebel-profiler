@@ -33,6 +33,36 @@ from rebel_profiler.llm.budget import (
 from rebel_profiler.llm.catalog import model_params_b, suggest_models
 from rebel_profiler.llm.inference import ModelPlane, TinyLlmEngine
 from rebel_profiler.llm.planner import build_plan_prompt, parse_proposals
+
+
+@pytest.fixture(autouse=True)
+def _no_real_airllm(monkeypatch):
+    """Keep engine-selection tests offline and fast.
+
+    When the airllm package IS installed, select_engine('Qwen/…') would
+    start a real model download + layer split inside these unit tests.
+    Stub AutoModel so 'airllm importable' still drives the selection path
+    without ever touching the network.
+    """
+    try:
+        import airllm  # noqa: F401
+    except ImportError:
+        yield
+        return
+    import sys
+    import types
+
+    fake = types.ModuleType("airllm")
+
+    class _FakeAutoModel:
+        @staticmethod
+        def from_pretrained(*_a, **_kw):
+            raise RuntimeError("stubbed: tests must not download models")
+
+    fake.AutoModel = _FakeAutoModel
+    monkeypatch.setitem(sys.modules, "airllm", fake)
+    yield
+    return
 from rebel_profiler.llm.daemon import (
     JobValidationError,
     LlmDaemon,

@@ -42,6 +42,45 @@ AIRLLM_OPTIONS = (
     "delete_original",   # reclaim checkpoint disk after the layer split
 )
 
+# Seconds before an airllm load (model download + layer split) is abandoned.
+# A cold 4B model can legitimately take minutes; a wedged network must not
+# stall the plane forever. Bound the WAIT, not the compute.
+AIRLLM_LOAD_TIMEOUT_S = 600
+
+
+def _airllm_load_guard(seconds: float):
+    """Install a SIGALRM watchdog that aborts a stalled airllm load.
+
+    Returns a context-manager style pair (arm, disarm); on Unix only. On
+    platforms without SIGALRM the pair degrades to no-ops — Windows callers
+    simply keep the old unbounded behavior.
+    """
+    import signal
+
+    class _Timeout(Exception):
+        pass
+
+    def _handler(signum, frame):
+        raise _Timeout(f"airllm load exceeded {seconds:.0f}s")
+
+    class _Guard:
+        def __enter__(self):
+            try:
+                signal.signal(signal.SIGALRM, _handler)
+                signal.alarm(int(seconds))
+            except (ValueError, OSError, AttributeError):
+                pass   # non-main thread or no SIGALRM: run unguarded
+            return self
+
+        def __exit__(self, *exc):
+            try:
+                signal.alarm(0)
+            except Exception:
+                pass
+            return False
+
+    return _Guard()
+
 
 @dataclass(frozen=True)
 class GenerationResult:
@@ -133,18 +172,25 @@ class AirLlmEngine:
         try:
             # AirLLM 4.x defaults to cuda:0; pass the placement explicitly so
             # CPU-only and Apple-silicon machines never hit a CUDA assertion.
-            self._model = airllm.AutoModel.from_pretrained(
-                self.model_id, device=device, **self.options)
+            # The load itself (download + layer split) is watchdog-bounded:
+            # a wedged HF transfer must fail structurally, not hang the CLI.
+            with _airllm_load_guard(AIRLLM_LOAD_TIMEOUT_S):
+                self._model = airllm.AutoModel.from_pretrained(
+                    self.model_id, device=device, **self.options)
             self._tokenizer = self._model.tokenizer
         except Exception as exc:  # structured failure, never a stack-trace dump
             self.unload()
             from ..core.errors import DependencyUnavailableError
 
+            timed_out = type(exc).__name__ == "_Timeout"
             raise DependencyUnavailableError(
                 f"AirLLM could not load '{self.model_id}'",
-                reason=f"{type(exc).__name__}: {exc}",
+                reason=(f"load watchdog fired after {AIRLLM_LOAD_TIMEOUT_S}s "
+                        "(download/split still running or network wedged)"
+                        if timed_out else f"{type(exc).__name__}: {exc}"),
                 action="Check disk space in the HF cache, the model id, and "
-                       "hf_token for gated models.",
+                       "hf_token for gated models. For a quick local start, "
+                       "pin a GGUF checkpoint with --model /path/to/model.gguf.",
             ) from exc
 
     def unload(self) -> None:
