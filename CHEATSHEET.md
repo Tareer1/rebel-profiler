@@ -20,6 +20,12 @@ rebel-profiler llm setup                        # hardware-aware install guidanc
 rebel-profiler llm local                        # checkpoints on disk + run commands
 rebel-profiler llm status                       # what can THIS machine run?
 rebel-profiler llm models                       # which models fit?
+
+# Shell completion + short alias (bash or zsh, once):
+source <repo>/completions/rebel-profiler.bash    # bash
+echo "alias rp='rebel-profiler'" >> ~/.zshrc     # then: rp doctor
+# zsh: copy completions/_rebel-profiler to a dir on your $fpath, or source it
+# from ~/.zshrc — Tab then completes subcommands, case ids and flags.
 ```
 
 ## 1. Case lifecycle (every job starts here)

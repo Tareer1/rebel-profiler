@@ -1,0 +1,160 @@
+#compdef rebel-profiler
+# zsh completion for rebel-profiler.
+# Source it (or drop it in a dir on $fpath, e.g.
+# ~/.local/share/zsh/site-functions/_rebel-profiler):
+#   source <(/home/$USER/rebel-profiler/completions/_rebel-profiler 2>/dev/null || true)
+# or directly:
+#   source ~/rebel-profiler/completions/_rebel-profiler
+
+_rebel_profiler() {
+    local -a commands
+    commands=(
+        'case:case lifecycle (create, scope, activate, close)'
+        'scope-check:check whether a target is in scope'
+        'plan:dry-run an action through the policy gates'
+        'run:execute one gated action'
+        'adapters:list the registered action adapters'
+        'knowledge:built-in security knowledge base'
+        'report:case report from claims and evidence'
+        'surface:attack-surface graph and exposure map'
+        'intel:intelligence collection and fusion'
+        'evidence:hash-chained evidence ledger'
+        'audit:tamper-evident audit chain'
+        'member:case membership (RBAC)'
+        'approval:approval queue for gated actions'
+        'hypothesis:investigation hypotheses'
+        'workflow:persistent workflows'
+        'schedule:scheduled jobs'
+        'search:search collected evidence'
+        'credential:credential vault'
+        'plugin:plugin management'
+        'events:event stream'
+        'serve:serve the API'
+        'ops:operations and maintenance'
+        'worker:execution worker'
+        'browser:browser bridge for the LLM'
+        'agent:LLM agent sessions (run, auto, chat, work)'
+        'forge:Feature Forge (LLM-written adapters)'
+        'system:privileged system jobs'
+        'detection:detection engineering'
+        'complaint:complaint drafting'
+        'llm:LLM plane (status, models, generate, daemon)'
+        'bounty:bug-bounty workflow'
+        'doctor:health check'
+    )
+
+    local -a global_flags
+    global_flags=(
+        '(-o --output)'{-o,--output}'[output format]:format:(human json jsonl csv)'
+        '(-y --yes)'{-y,--yes}'[assume yes for confirmations]'
+        '--actor[acting operator]:actor:'
+        '--rbac[enable role-based access control]'
+        '--config-file[config profile]:file:_files'
+    )
+
+    _arguments -C \
+        $global_flags \
+        '1:command:->cmd' \
+        '*::arg:->args'
+
+    case $state in
+        cmd)
+            _describe -t commands 'rebel-profiler command' commands ;;
+        args)
+            # In the args state $words[1] is the top-level command.
+            case $words[1] in
+                case)
+                    local -a case_sub
+                    case_sub=('create:new case' 'list:list cases'
+                              'show:show a case'
+                              'activate:activate (scope enforcement live)'
+                              'close:close a case' 'scope:scope entries')
+                    if (( CURRENT == 2 )); then
+                        _describe -t case-sub 'case command' case_sub
+                    elif [[ $words[2] == (show|activate|close) ]]; then
+                        _rp_case_ids
+                    elif [[ $words[2] == scope && $words[3] == (add|remove) ]]; then
+                        _rp_case_ids
+                    fi ;;
+                scope-check|plan|run|report|evidence|audit|surface)
+                    _rp_case_ids ;;
+                intel)
+                    _rp_case_ids ;;
+                agent)
+                    local -a agent_sub
+                    agent_sub=('run:one agent session' 'auto:Autonomous Engineer'
+                               'chat:Hermes agent (no goal = interactive REPL)'
+                               'work:self-repair session')
+                    if (( CURRENT == 2 )); then
+                        _describe -t agent-sub 'agent command' agent_sub
+                    elif (( CURRENT == 3 )); then
+                        _rp_case_ids
+                    else
+                        _arguments \
+                            '--llm[model id or checkpoint path]:model:' \
+                            '--plan[deterministic plan]:plan:' \
+                            '--max-actions[cap on actions]:n:' \
+                            '--max-turns[cap on Hermes turns]:n:' \
+                            '--max-repair-attempts[cap on repairs]:n:'
+                    fi ;;
+                llm)
+                    local -a llm_sub
+                    llm_sub=('setup:hardware-aware install guidance'
+                             'models:models that fit this machine'
+                             'local:checkpoints on disk'
+                             'status:hardware budget and engine status'
+                             'generate:one generation'
+                             'plan:LLM planner (dry)'
+                             'submit:submit a daemon job'
+                             'data:case data pack job'
+                             'daemon:resident worker')
+                    if (( CURRENT == 2 )); then
+                        _describe -t llm-sub 'llm command' llm_sub
+                    else
+                        _arguments \
+                            '--model[model id]:model:' \
+                            '--tier[budget tier]:tier:(tiny low mid high)' \
+                            '--local[use the best local model]'
+                    fi ;;
+                bounty)
+                    local -a bounty_sub
+                    bounty_sub=('import:import program scope CSV'
+                                'run:audit in-scope assets'
+                                'assess:severity + CWE + repro'
+                                'report:submission-ready report'
+                                'auto:one-goal bounty chain')
+                    (( CURRENT == 2 )) && _describe -t bounty-sub 'bounty command' bounty_sub ;;
+                forge)
+                    local -a forge_sub
+                    forge_sub=('propose:submit adapter source through the gates'
+                               'list:list forged modules'
+                               'register:register forged adapters')
+                    (( CURRENT == 2 )) && _describe -t forge-sub 'forge command' forge_sub ;;
+            esac ;;
+    esac
+}
+
+_rp_case_ids() {
+    # Case ids from the workspace index; fail silently when absent.
+    local -a ids
+    ids=(${(f)"$(python3 -c '
+import json, pathlib
+idx = pathlib.Path.home() / ".local/share/rebel-profiler/index.json"
+try:
+    data = json.loads(idx.read_text())
+except Exception:
+    raise SystemExit
+cases = data.get("cases") if isinstance(data, dict) else data
+if isinstance(cases, list):
+    for c in cases:
+        if isinstance(c, dict) and c.get("id"):
+            print(c["id"])
+' 2>/dev/null)"})
+    _describe -t case-ids 'case id' ids
+}
+
+# When autoloaded from $fpath by compinit, run immediately; when sourced
+# manually, just define the functions (no compinit errors).
+if [ "$funcstack[1]" = "_rebel-profiler" ]; then
+    _rebel_profiler "$@"
+fi
