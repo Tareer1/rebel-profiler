@@ -308,3 +308,96 @@ def render_human_report(report):
     from rebel_profiler.llm.hermes import render_human
 
     return render_human(report)
+
+
+# ---------------------------------------------------------------- interactive REPL
+
+
+class TestAgentChatRepl:
+    """`agent chat` with no goal opens the interactive Hermes chat."""
+
+    def _run_repl(self, monkeypatch, capsys, replies, lines, env_fixture,
+                  case_id="c1"):
+        db, store, broker = env_fixture
+        plane = ScriptedPlane(replies)
+        fed = list(lines)
+
+        def fake_input(prompt=""):
+            if not fed:
+                raise EOFError
+            head = fed.pop(0)
+            if isinstance(head, Exception):
+                raise head
+            return head
+
+        monkeypatch.setattr("builtins.input", fake_input)
+
+        from types import SimpleNamespace
+
+        from rebel_profiler.cli.main import _cmd_agent_chat_repl
+
+        args = SimpleNamespace(case_id=case_id, goal="", max_turns=4,
+                               llm="", output="human")
+
+        class FakeCtx:
+            def __init__(self):
+                self._db = db
+                self._broker = broker
+
+            def find_case(self, cid):
+                return {"id": cid}
+
+            def open_case(self, cid):
+                return db
+
+            def broker(self, db_):
+                return broker
+
+            def evidence_store(self, db_, cid):
+                return store
+
+        rc = _cmd_agent_chat_repl(FakeCtx(), args, plane=plane)
+        return rc, capsys.readouterr().out
+
+    def test_repl_runs_loops_and_quits(self, env, monkeypatch, capsys):
+        call = ('<tool_call>{"name": "echo", "arguments": '
+                '{"target": "h1.lab.example.test", "message": "hi"}}</tool_call>')
+        rc, out = self._run_repl(
+            monkeypatch, capsys,
+            replies=[call, "Goal met.", "Just answering."],
+            lines=["do a thing", "what happened?", "/exit"],
+            env_fixture=env)
+        assert rc == 0
+        assert "hermes interactive" in out
+        assert "hermes> Goal met." in out
+        assert "hermes> Just answering." in out
+
+    def test_repl_tools_command(self, env, monkeypatch, capsys):
+        rc, out = self._run_repl(
+            monkeypatch, capsys, replies=[],
+            lines=["/tools", "/exit"], env_fixture=env)
+        assert rc == 0
+        assert "dns-lookup" in out
+
+    def test_repl_tiny_engine_refuses(self, env, monkeypatch, capsys):
+        from types import SimpleNamespace
+
+        from rebel_profiler.cli.main import _cmd_agent_chat_repl
+        from rebel_profiler.llm.budget import DEFAULT_LIMITS
+        from rebel_profiler.llm.inference import ModelPlane
+
+        db, store, broker = env
+        plane = ModelPlane(limits=DEFAULT_LIMITS["mid"], prefer_engine="tiny")
+        plane.load_tiny()
+
+        Args = SimpleNamespace(case_id="c1", goal="", max_turns=4, llm="")
+
+        class FakeCtx:
+            def find_case(self, cid):
+                return {"id": cid}
+
+            def open_case(self, cid):
+                return db
+
+        with pytest.raises(DependencyUnavailableError):
+            _cmd_agent_chat_repl(FakeCtx(), Args, plane=plane)

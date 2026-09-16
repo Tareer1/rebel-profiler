@@ -1367,6 +1367,8 @@ def cmd_agent_auto(ctx: AppContext, args: argparse.Namespace) -> int:
 
 def cmd_agent_chat(ctx: AppContext, args: argparse.Namespace) -> int:
     """The Hermes agent: ChatML tool-calling loop (one <tool_call> per turn)."""
+    if not str(getattr(args, "goal", "") or "").strip():
+        return _cmd_agent_chat_repl(ctx, args)
     from ..llm.inference import ModelPlane
     from ..llm.planner import _plane_from_env
     from ..llm.budget import resolve_limits
@@ -1391,6 +1393,92 @@ def cmd_agent_chat(ctx: AppContext, args: argparse.Namespace) -> int:
         emit({"human": render_human(report), "data": report}, args.output)
         return EXIT_SUCCESS
     finally:
+        db.close()
+
+
+def _hermes_repl_plane():
+    """Resolve the ModelPlane for the interactive Hermes REPL."""
+    from ..llm.budget import resolve_limits
+    from ..llm.inference import ModelPlane
+
+    prefer = os.environ.get("RP_LLM__ENGINE", "").strip().lower()
+    return ModelPlane(
+        limits=resolve_limits(),
+        prefer_engine=prefer if prefer in {"tiny", "airllm", "external", "gguf", "native"} else None)
+
+
+def _cmd_agent_chat_repl(ctx: AppContext, args: argparse.Namespace,
+                         plane=None) -> int:
+    """Interactive Hermes chat: goals and questions, one gated loop per line.
+
+    The engine is selected ONCE (heavy weights load a single time), every
+    user line runs a bounded Hermes loop through the broker gates, and the
+    model is unloaded on exit so the machine goes quiet again.
+    """
+    from ..llm.hermes import HermesAgentLoop, render_human, tool_schema
+    from ..llm.inference import TinyLlmEngine
+
+    rec = ctx.find_case(args.case_id)
+    db = ctx.open_case(rec["id"])
+    plane = plane or _hermes_repl_plane()
+    try:
+        # Select only when the plane has no engine yet — a caller (or test
+        # double) may have pinned one deliberately.
+        if plane.engine is None:
+            plane.select_engine(str(getattr(args, "llm", "") or ""))
+        if isinstance(plane.engine, TinyLlmEngine):
+            from ..core.errors import DependencyUnavailableError
+
+            raise DependencyUnavailableError(
+                "Interactive Hermes needs real weights; only the tiny engine loaded",
+                reason=plane.fallback_reason,
+                action="Install an engine (pip install 'rebel-profiler[gguf]' or "
+                       "'rebel-profiler[airllm]'), pull a model ('llm setup', "
+                       "'llm local'), or use 'agent run --plan' for the "
+                       "deterministic path.",
+            )
+        tools = tool_schema(ctx.broker(db).adapters)
+        engine = plane.engine_kind or "?"
+        model = getattr(plane.engine, "model_id", "") or "?"
+        print(f"hermes interactive — case {rec['id']}  "
+              f"engine: {engine}  model: {model}  tools: {len(tools)}")
+        print("type a goal or question; /tools lists tools; /help; /exit quits")
+        while True:
+            try:
+                line = input("\nyou> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                break
+            if not line:
+                continue
+            if line in {"/exit", "/quit", "quit", "exit", "q"}:
+                break
+            if line == "/tools":
+                for tool in tools:
+                    fn = tool["function"]
+                    print(f"  {fn['name']:<22} {fn['description']}")
+                continue
+            if line in {"/help", "help"}:
+                print("  <text>            run one Hermes loop toward that goal")
+                print("  /tools            list the tools the model may call")
+                print("  /exit             unload the model and leave")
+                continue
+            print("  hermes is working…")
+            loop = HermesAgentLoop(
+                rec["id"], line, plane=plane,
+                broker=ctx.broker(db), evidence=ctx.evidence_store(db, rec["id"]),
+                db=db, max_turns=args.max_turns,
+            )
+            report = loop.run()
+            for call in report["calls"]:
+                state = "ok " if not call.get("error") else "err"
+                print(f"  → [{state}] {call.get('action', '')} "
+                      f"{call.get('target', '')}")
+            answer = report.get("final_answer") or "(no answer — turn budget hit)"
+            print(f"hermes> {answer}")
+        return EXIT_SUCCESS
+    finally:
+        plane.unload()   # the machine goes quiet again
         db.close()
 
 
@@ -2705,11 +2793,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_aauto.add_argument("--max-actions", type=int, default=12)
     p_aauto.add_argument("--max-repair-attempts", type=int, default=2)
     p_achat = agent_subs.add_parser("chat", parents=[sub_common],
-                                    help="Hermes agent: ChatML tool-calling loop (<tools> system prompt, one <tool_call> per turn)")
+                                    help="Hermes agent: interactive ChatML chat (no goal → live REPL), or one loop with a goal")
     p_achat.add_argument("case_id")
-    p_achat.add_argument("goal")
+    p_achat.add_argument("goal", nargs="?", default="",
+                         help="omit for the interactive Hermes chat")
     p_achat.add_argument("--max-turns", type=int, default=8,
-                         help="bounded agentic turns (default 8)")
+                         help="bounded agentic turns per message (default 8)")
+    p_achat.add_argument("--llm", default="", metavar="MODEL",
+                         help="pin the model (default: config profile / engine default)")
     p_awrk = agent_subs.add_parser("work", parents=[sub_common], help="self-repair session: work list → error log → revise → asks you")
     p_awrk.add_argument("case_id")
     p_awrk.add_argument("goal")
