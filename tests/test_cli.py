@@ -135,3 +135,94 @@ class TestAdaptersAndDoctor:
 
     def test_no_args_shows_help_exit2(self, capsys):
         assert main([]) == 2
+
+
+class TestNoTracebackContract:
+    """Every CLI error is structured — a raw traceback is a bug (wrench audit)."""
+
+    def test_detection_kinds_needs_no_case(self, workspace, capsys):
+        # regression: the shared handler read args.case_id for every
+        # subcommand, so the case-independent `detection kinds` crashed
+        # with a raw AttributeError.
+        assert main([*workspace, "detection", "kinds", "-o", "json"]) == 0
+        rows = json.loads(capsys.readouterr().out)["data"]
+        kinds = {r["kind"] for r in rows}
+        assert {"canary_tripwire", "eicar_test_file", "ioc_bundle",
+                "yara_ruleset"} <= kinds
+
+    def test_hypothesis_add_bad_json_is_usage_error(self, workspace, capsys):
+        # regression: invalid --criteria JSON raised a raw JSONDecodeError.
+        assert main([*workspace, "case", "create", "H", "d", "-o", "json"]) == 0
+        case_id = _only_case_id(capsys)
+        assert main([*workspace, "case", "activate", case_id]) == 0
+        capsys.readouterr()
+        rc = main([*workspace, "hypothesis", "add", case_id, "s",
+                   "--criteria", "not-json", "-o", "json"])
+        assert rc == 2
+        err = json.loads(capsys.readouterr().err)["error"]
+        assert "--criteria" in err["message"]
+
+    def test_hypothesis_evaluate_needs_no_case_id(self, workspace, capsys):
+        # regression: `evaluate <id>` carries no case_id but the shared
+        # handler read args.case_id → raw AttributeError.
+        assert main([*workspace, "case", "create", "H2", "d", "-o", "json"]) == 0
+        case_id = _only_case_id(capsys)
+        assert main([*workspace, "case", "activate", case_id]) == 0
+        capsys.readouterr()
+        assert main([*workspace, "hypothesis", "add", case_id, "s",
+                     "--criteria", '[{"kind": "exists", "subject": "x", '
+                     '"claim_kind": "ip"}]', "-o", "json"]) == 0
+        capsys.readouterr()
+        assert main([*workspace, "hypothesis", "list", case_id,
+                     "-o", "json"]) == 0
+        listing = json.loads(capsys.readouterr().out)
+        hyp_id = listing["data"][0]["id"]
+        assert main([*workspace, "hypothesis", "evaluate", hyp_id,
+                     "-o", "json"]) == 0
+        payload = json.loads(capsys.readouterr().out)["data"]
+        assert payload["status"] in {"supported", "refuted", "untestable"}
+
+    def test_workflow_create_reads_dsl_file(self, workspace, capsys, tmp_path):
+        # regression: argparse FileType hands an open file; .read_text()
+        # on it crashed with an AttributeError.
+        assert main([*workspace, "case", "create", "W", "d", "-o", "json"]) == 0
+        case_id = _only_case_id(capsys)
+        assert main([*workspace, "case", "activate", case_id]) == 0
+        dsl = tmp_path / "flow.dsl"
+        dsl.write_text('workflow "w" {\n'
+                       '  step dns action passive-dns '
+                       'target=host1.lab.example.test record_type=A\n}\n')
+        capsys.readouterr()
+        assert main([*workspace, "workflow", "create", case_id,
+                     str(dsl), "-o", "json"]) == 0
+        payload = json.loads(capsys.readouterr().out)["data"]
+        assert payload["steps"] == 1
+
+    def test_worker_submit_runs_the_queue(self, workspace, capsys):
+        # regression: an isinstance(..., callable) probe in cmd_worker
+        # raised TypeError before any worker subcommand could run.
+        assert main([*workspace, "case", "create", "WK", "d", "-o", "json"]) == 0
+        case_id = _only_case_id(capsys)
+        assert main([*workspace, "case", "activate", case_id]) == 0
+        capsys.readouterr()
+        assert main([*workspace, "worker", "submit", case_id, "host-discovery",
+                     "host1.lab.example.test", "-p", "mode", "discover",
+                     "--yes", "-o", "json"]) == 0
+        job = json.loads(capsys.readouterr().out)["data"]["job_id"]
+        assert main([*workspace, "worker", "status", job, "-o", "json"]) == 0
+        assert main([*workspace, "worker", "list", "-o", "json"]) == 0
+
+    def test_forge_propose_reads_source_file(self, workspace, capsys, tmp_path):
+        # regression: same FileType/.read_text() crash, in forge propose.
+        mod = tmp_path / "mod.py"
+        mod.write_text("def run(payload):\n    return {}\n")
+        rc = main([*workspace, "forge", "propose", str(mod), "-o", "json"])
+        # the gate's own verdict: 0 accepted, 1 rejected — but never a crash
+        assert rc in {0, 1}
+        assert "Traceback" not in capsys.readouterr().err
+
+
+def _only_case_id(capsys) -> str:
+    out = capsys.readouterr().out
+    data = json.loads(out)["data"]
+    return data["id"]

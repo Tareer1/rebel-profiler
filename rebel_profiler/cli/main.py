@@ -956,20 +956,48 @@ def cmd_hypothesis(ctx: AppContext, args: argparse.Namespace) -> int:
     from ..evidence.audit import AuditChain as _A
 
     from ..intel import ClaimLedger, SourceRegistry
-    from ..intel.hypotheses import HypothesisEngine, render_human
+    from ..intel.hypotheses import HypothesisEngine, HypothesisError, render_human
 
+    # `evaluate <hyp-id>` carries no case_id: the hypothesis id resolves the
+    # case through the workspace index (regression: the shared handler read
+    # args.case_id for every subcommand and crashed with an AttributeError).
+    if args.hypothesis_command == "evaluate":
+        for rec in ctx.list_cases():
+            db = ctx.open_case(rec["id"])
+            try:
+                engine = HypothesisEngine(
+                    db, ClaimLedger.load_from_db(db, rec["id"], SourceRegistry()))
+                try:
+                    hyp = engine.evaluate(args.hypothesis_id)
+                except HypothesisError:
+                    continue   # not in this case — keep looking
+                emit({"human": f"{hyp.id} → {hyp.status}\n" + render_human([hyp]),
+                      "data": hyp.as_dict()}, args.output)
+                return EXIT_SUCCESS
+            finally:
+                db.close()
+        raise UsageError(
+            f"Hypothesis '{args.hypothesis_id}' not found in any case",
+            action="List hypotheses with: rebel-profiler hypothesis list <case-id>")
     rec = ctx.find_case(args.case_id)
     db = ctx.open_case(rec["id"])
     try:
         engine = HypothesisEngine(db, ClaimLedger.load_from_db(db, rec["id"], SourceRegistry()))
         if args.hypothesis_command == "add":
-            criteria = _json.loads(args.criteria)
+            try:
+                criteria = _json.loads(args.criteria)
+            except _json.JSONDecodeError as exc:
+                # A raw traceback here violated the every-error-is-structured
+                # contract; invalid criteria input is ordinary usage error.
+                raise UsageError(
+                    "--criteria is not valid JSON",
+                    reason=f"JSON decode failed: {exc}",
+                    action=('Pass a JSON list, e.g. --criteria \'[{"kind": '
+                            '"exists", "subject": "h1", "claim_kind": '
+                            '"ip"}]\''),
+                ) from exc
             hyp = engine.add(rec["id"], args.statement, criteria, rationale=args.rationale or "")
             emit({"human": f"Hypothesis {hyp.id} recorded ({len(hyp.criteria)} criteria).",
-                  "data": hyp.as_dict()}, args.output)
-        elif args.hypothesis_command == "evaluate":
-            hyp = engine.evaluate(args.hypothesis_id)
-            emit({"human": f"{hyp.id} → {hyp.status}\n" + render_human([hyp]),
                   "data": hyp.as_dict()}, args.output)
         else:  # list
             hyps = engine.list(rec["id"])
@@ -988,13 +1016,16 @@ def cmd_workflow(ctx: AppContext, args: argparse.Namespace) -> int:
     try:
         runner = WorkflowRunner(db, ctx.broker(db), AuditChain(db))
         if args.workflow_command == "create":
-            spec = parse_workflow(args.dsl_file.read_text())
+            # argparse FileType already opened the file; read() it (regression:
+            # .read_text() on an open file object crashed with AttributeError).
+            spec = parse_workflow(args.dsl_file.read())
             started = runner.start(rec["id"], spec)
             emit({"human": f"Workflow '{started['name']}' created: {started['workflow_id']} "
                            f"({started['steps']} steps)", "data": started}, args.output)
         elif args.workflow_command == "run":
             if args.dsl_file is not None:
-                spec = parse_workflow(args.dsl_file.read_text())
+                # FileType opened it already — read() (see create above).
+                spec = parse_workflow(args.dsl_file.read())
                 started = runner.start(rec["id"], spec)
                 status = runner.resume(rec["id"], started["workflow_id"])
             else:
@@ -1241,9 +1272,8 @@ def cmd_ops(ctx: AppContext, args: argparse.Namespace) -> int:
 def cmd_worker(ctx: AppContext, args: argparse.Namespace) -> int:
     from ..execution.worker import JobPlane, WorkerDaemon
 
-    queue_dir = Path(ctx.config.get("paths.queue_dir") or (ctx.data_dir / "queue")) \
-        if isinstance(getattr(ctx.config, "get", None), callable) else ctx.data_dir / "queue"
-    # config dict, not dict-like: use core.config.get
+    # config is a plain dict — read it through core.config.get (the earlier
+    # isinstance(..., callable) probe here was a TypeError waiting to fire).
     from ..core.config import get as _get
 
     queue_dir = Path(_get(ctx.config, "paths.queue_dir", "") or (ctx.data_dir / "queue"))
@@ -1558,7 +1588,9 @@ def cmd_forge(ctx: AppContext, args: argparse.Namespace) -> int:
 
     forge = FeatureForge(ctx.data_dir, audit=None)
     if args.forge_command == "propose":
-        source = args.source_file.read_text() if args.source_file else sys.stdin.read()
+        # argparse FileType already opened the file; read() it (regression:
+        # .read_text() on an open file object crashed with AttributeError).
+        source = args.source_file.read() if args.source_file else sys.stdin.read()
         if not source.strip():
             raise UsageError(
                 "No adapter source provided",
@@ -1643,6 +1675,15 @@ def cmd_detection(ctx: AppContext, args: argparse.Namespace) -> int:
     """Detection engineering: benign test artifacts + IoC/YARA rules."""
     from ..intel.detection import ARTIFACT_KINDS, DetectionLab
 
+    # `kinds` is a static catalog — it needs no case, so it must not demand
+    # one (regression: the shared handler read args.case_id for every
+    # subcommand and crashed with a raw AttributeError on `detection kinds`).
+    if args.detection_command == "kinds":
+        rows = [{"kind": k, "risk": v[0], "description": v[1]}
+                for k, v in sorted(ARTIFACT_KINDS.items())]
+        emit({"human": "Available benign artifact kinds:", "data": rows}, args.output)
+        return EXIT_SUCCESS
+
     rec = ctx.find_case(args.case_id)
     db = ctx.open_case(rec["id"])
     try:
@@ -1664,10 +1705,6 @@ def cmd_detection(ctx: AppContext, args: argparse.Namespace) -> int:
                 for bucket, values in record["iocs"].items():
                     human.append(f"  {bucket}: {', '.join(values[:8])}")
             emit({"human": "\n".join(human), "data": record}, args.output)
-        elif args.detection_command == "kinds":
-            rows = [{"kind": k, "risk": v[0], "description": v[1]}
-                    for k, v in sorted(ARTIFACT_KINDS.items())]
-            emit({"human": "Available benign artifact kinds:", "data": rows}, args.output)
         else:  # list
             rows = lab.list_artifacts()
             emit({"human": f"{len(rows)} artifact(s) in the detections folder:",
@@ -2856,7 +2893,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_detg.add_argument("--text", default="", help="free text to extract IoCs from")
     p_detg.add_argument("--ioc", action="append", help="explicit IoC as kind=value (repeatable)")
     p_detg.add_argument("--note", default="")
-    p_detk = det_subs.add_parser("kinds", parents=[sub_common], help="list artifact kinds")
+    p_detk = det_subs.add_parser("kinds", parents=[sub_common], help="list artifact kinds (no case needed)")
     p_detl = det_subs.add_parser("list", parents=[sub_common], help="list generated artifacts")
     p_detl.add_argument("case_id")
 
