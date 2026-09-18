@@ -1,6 +1,6 @@
 """Rebel Profiler — Kali Linux Cybersecurity Intelligence & Authorized Security Operations Framework."""
 
-__version__ = "1.1.0"
+__version__ = "1.3.1"
 
 APP_NAME = "Rebel Profiler"
 APP_DESCRIPTION = (

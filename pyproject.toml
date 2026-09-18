@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rebel-profiler"
-version = "1.3.0"
+version = "1.3.1"
 description = "Kali Linux Cybersecurity Intelligence & Authorized Security Operations Framework"
 readme = "README.md"
 requires-python = ">=3.11"
