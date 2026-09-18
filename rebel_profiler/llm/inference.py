@@ -47,6 +47,28 @@ AIRLLM_OPTIONS = (
 # stall the plane forever. Bound the WAIT, not the compute.
 AIRLLM_LOAD_TIMEOUT_S = 600
 
+# How much of a failed engine's diagnosis is echoed back to the operator. The
+# taxonomy's ``reason`` carries the real cause (a llama.cpp ValueError, the
+# budget figure that was breached); the note still has to stay readable.
+FAILURE_DETAIL_MAX = 240
+
+
+def _failure_detail(exc: BaseException) -> str:
+    """One-line diagnosis for *exc*: its message *and* its taxonomy reason.
+
+    ``str(RPError)`` is only ever the message, so rendering an exception
+    plainly threw away the part that tells the operator what to do: a
+    truncated GGUF surfaced as "could not load" with no "model is corrupted
+    or incomplete" anywhere to act on.
+    """
+    message = str(exc)
+    detail = str(getattr(exc, "reason", "") or "").strip()
+    if not detail or detail in message:
+        return message
+    combined = f"{message} ({detail})"
+    return (combined[:FAILURE_DETAIL_MAX] + "..."
+            if len(combined) > FAILURE_DETAIL_MAX else combined)
+
 
 def _airllm_load_guard(seconds: float):
     """Install a SIGALRM watchdog that aborts a stalled airllm load.
@@ -350,6 +372,21 @@ class ModelPlane:
     def fallback_reason(self) -> str:
         return self._fallback_reason
 
+    def _load_or_release(self, engine):
+        """Load an engine; on failure release whatever it already took.
+
+        A load can fail *after* the engine mapped its weights: the budget
+        guard checks RSS once the checkpoint is resident, so a plain raise
+        would strand a multi-GB mapping while the plane moves on to the next
+        engine. One engine at a time is the plane's law, failures included.
+        """
+        try:
+            engine.load()
+        except Exception:
+            engine.unload()
+            raise
+        return engine
+
     def select_engine(self, model: str, **options):
         """Choose airllm when loadable and allowed; tiny otherwise.
 
@@ -375,7 +412,7 @@ class ModelPlane:
         if self._prefer == "gguf":
             # Explicit GGUF pin: the caller knows the checkpoint is a gguf.
             engine = self._engine_for("gguf", model, **options)
-            engine.load()
+            self._load_or_release(engine)
             self.unload()
             self._engine = engine
             self._engine_kind = "gguf"
@@ -388,7 +425,7 @@ class ModelPlane:
         reasons: list[str] = []
 
         def _adopt(kind: str, engine):
-            engine.load()
+            self._load_or_release(engine)
             self.unload()
             self._engine = engine
             self._engine_kind = kind
@@ -407,7 +444,8 @@ class ModelPlane:
         except Exception as exc:
             self.unload()
             reasons.append(
-                f"gguf engine unavailable ({type(exc).__name__}: {exc})")
+                f"gguf engine unavailable "
+                f"({type(exc).__name__}: {_failure_detail(exc)})")
         try:
             # Native engine first when the checkpoint is ALREADY on disk:
             # no airllm install, no download. Falls through to airllm (which
@@ -420,14 +458,16 @@ class ModelPlane:
         except Exception as exc:
             self.unload()
             reasons.append(
-                f"native engine unavailable ({type(exc).__name__}: {exc})")
+                f"native engine unavailable "
+                f"({type(exc).__name__}: {_failure_detail(exc)})")
         try:
             engine = self._engine_for("airllm", model, **options)
             return _adopt("airllm", engine)
         except Exception as exc:
             self.unload()
             reasons.append(
-                f"airllm unavailable ({type(exc).__name__}: {exc})")
+                f"airllm unavailable "
+                f"({type(exc).__name__}: {_failure_detail(exc)})")
             self._fallback_reason = (
                 "; ".join(reasons)
                 + "; fell back to the deterministic tiny engine")
@@ -482,6 +522,22 @@ class ModelPlane:
         self._engine_kind = "tiny"
         self._fallback_reason = self._fallback_reason or "tiny engine loaded"
         return engine
+
+    def chat_generate(self, system: str, user: str, **kwargs) -> GenerationResult:
+        """Generate a chat turn in the loaded engine's native chat format.
+
+        Callers (planner, codegen, repair loops) compose plain instruction
+        text; this renders it through the engine's own ``chat_prompt`` before
+        generation, so an instruct checkpoint — Qwen2.5, Llama, Dolphin —
+        receives the role structure it was trained on instead of a bare
+        prompt it can degenerate on. Engines without a template fall back to
+        the same plain concatenation their ``chat_prompt`` already applies.
+        Hermes is the exception by design: it renders ChatML client-side for
+        its multi-turn history and calls ``generate`` directly.
+        """
+        chat = getattr(self._engine, "chat_prompt", None)
+        prompt = chat(system, user) if callable(chat) else f"{system}\n\n{user}\n"
+        return self.generate(prompt, **kwargs)
 
     def unload(self) -> None:
         if self._engine is not None:

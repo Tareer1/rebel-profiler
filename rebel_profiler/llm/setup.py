@@ -54,7 +54,14 @@ def _gguf_fits(row: dict, limits: Limits) -> bool:
     The RAM check is what keeps the verdict honest: without it an 8B Q4 model
     was announced as fitting the mid tier, then refused at load when the real
     RSS crossed that tier's ceiling.
+
+    A checkpoint that cannot even hold its own tensors is excluded first: no
+    memory ceiling can make a truncated file runnable, so "fits" would be a
+    promise nothing can keep. An *unverified* file (``integrity_ok is None``)
+    is left alone - the budget never punishes what it could not check.
     """
+    if row.get("integrity_ok") is False:
+        return False
     if not _fits(row["params_b"], row["compressed"], limits):
         return False
     return gguf_rss_need_mb(row.get("size_gb", 0.0)) <= limits.max_rss_mb
@@ -68,6 +75,21 @@ def smallest_fitting_tier(row: dict) -> str | None:
     return None
 
 
+def gguf_run_command(row: dict) -> str:
+    """The copy-paste command that actually runs this checkpoint *here*.
+
+    A checkpoint that does not fit the current tier has to have its tier
+    pinned explicitly: otherwise the printed command is refused by the very
+    budget guard that printed it. That refusal is correct behaviour, but a
+    printed hint the tool itself rejects is the opposite of help.
+    """
+    command = (f"rebel-profiler llm generate \"<prompt>\" "
+               f"--model {row['path']}")
+    if not row.get("fits") and row.get("needs_tier"):
+        command += f" --tier {row['needs_tier']}"
+    return command
+
+
 def local_models(*, limits: Limits, roots: list[str | Path] | None = None) -> dict:
     """Local checkpoints (GGUF + HF cache) with a fit verdict and run command."""
     gguf: list[dict] = []
@@ -78,8 +100,7 @@ def local_models(*, limits: Limits, roots: list[str | Path] | None = None) -> di
             row = dict(row)
             row["fits"] = _gguf_fits(row, limits)
             row["needs_tier"] = smallest_fitting_tier(row)
-            row["run"] = (f"rebel-profiler llm generate \"<prompt>\" "
-                          f"--model {row['path']}")
+            row["run"] = gguf_run_command(row)
             gguf.append(row)
     except Exception:
         pass
@@ -195,10 +216,14 @@ def setup_plan(*, engine: str | None = None, limits: Limits,
             install = entry.get("install_gpu") or install
         next_steps.append(f"install: {install}")
     if local["gguf"]:
-        best = local["gguf"][0]
-        next_steps.append(
-            f"run your local checkpoint: rebel-profiler llm generate \"<prompt>\" "
-            f"--model {best['path']}")
+        # Prefer a checkpoint that runs at the *current* tier; for one that
+        # needs a wider tier the run command already carries the tier pin, so
+        # the suggested next step is never a command the guard would refuse.
+        # Never suggest a file the integrity check called unusable.
+        usable = [r for r in local["gguf"] if r.get("integrity_ok") is not False]
+        best = next((r for r in usable if r["fits"]),
+                    (usable or local["gguf"])[0])
+        next_steps.append(f"run your local checkpoint: {best['run']}")
     elif local["hf"]:
         next_steps.append(
             f"run your local checkpoint: rebel-profiler llm generate \"<prompt>\" "
@@ -271,7 +296,11 @@ def render_local(payload: dict) -> str:
         lines.append(f"{engine.upper()} ({len(rows)}):")
         for row in rows:
             name = row.get("name") or row.get("model", "")
-            if row.get("fits"):
+            if row.get("integrity_ok") is False:
+                # Not a budget problem: the file cannot hold its own weights.
+                fit = ("UNUSABLE - "
+                       + (row.get("integrity_note") or "integrity check failed"))
+            elif row.get("fits"):
                 fit = "fits"
             else:
                 needs = row.get("needs_tier") if "needs_tier" in row else None
@@ -279,7 +308,10 @@ def render_local(payload: dict) -> str:
                        else "TOO BIG for this tier")
             extra = f"{row.get('quant', '')} {row.get('params_b', '?')}B".strip()
             lines.append(f"  {name}  [{extra}] {fit}")
-            lines.append(f"      run: {row['run']}")
+            if row.get("integrity_ok") is False:
+                lines.append("      run: (re-download the checkpoint first)")
+            else:
+                lines.append(f"      run: {row['run']}")
     if not payload["total"]:
         lines.append("")
         lines.append("  Nothing local yet. Put a .gguf in the project or set")

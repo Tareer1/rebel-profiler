@@ -26,12 +26,14 @@ format and size class to the budget guard.
 from __future__ import annotations
 
 import gc
+import mmap
 import os
 import re
+import struct
 import time
 from pathlib import Path
 
-from .budget import BudgetGuard, Limits
+from .budget import BudgetGuard, Limits, ModelBudgetError
 from .inference import GenerationResult
 
 # ---------------------------------------------------------------------------
@@ -96,23 +98,176 @@ def gguf_params_b(path: str | Path) -> float:
 
 
 # ---------------------------------------------------------------------------
+# integrity: a GGUF that cannot hold its own tensors is not a checkpoint
+
+# ggml tensor type -> (bytes per block, elements per block). The header states
+# only shapes and a type id, so the table is what turns a declaration into a
+# byte count - and a byte count is what says whether the file is long enough
+# to hold what it declares.
+_GGML_TYPE_BLOCK: dict[int, tuple[int, int]] = {
+    0: (4, 1), 1: (2, 1), 2: (18, 32), 3: (20, 32), 6: (22, 32), 7: (24, 32),
+    8: (34, 32), 9: (36, 32), 10: (84, 256), 11: (110, 256), 12: (144, 256),
+    13: (176, 256), 14: (210, 256), 15: (292, 256), 16: (66, 256),
+    17: (74, 256), 18: (98, 256), 19: (50, 256), 20: (18, 32), 21: (110, 256),
+    22: (82, 256), 23: (136, 256), 24: (1, 1), 25: (2, 1), 26: (4, 1),
+    27: (8, 1), 28: (8, 1), 29: (56, 256), 30: (2, 1),
+}
+
+# GGUF metadata value-type ids (the on-disk enum ).
+_GGUF_STRING, _GGUF_ARRAY = 8, 9
+_GGUF_SCALAR_SIZE = {0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1,
+                     10: 8, 11: 8, 12: 8}
+
+
+def _gguf_read_string(buf, pos: int) -> tuple[str, int]:
+    (length,) = struct.unpack_from("<Q", buf, pos)
+    pos += 8
+    if length > len(buf) - pos:
+        raise ValueError("string runs past the end of the file")
+    return bytes(buf[pos:pos + length]).decode("utf-8", "replace"), pos + length
+
+
+def _gguf_skip_value(buf, pos: int, vtype: int) -> int:
+    size = _GGUF_SCALAR_SIZE.get(vtype)
+    if size is not None:
+        return pos + size
+    if vtype == _GGUF_STRING:
+        _, pos = _gguf_read_string(buf, pos)
+        return pos
+    if vtype == _GGUF_ARRAY:
+        (elem,) = struct.unpack_from("<I", buf, pos)
+        (count,) = struct.unpack_from("<Q", buf, pos + 4)
+        pos += 12
+        elem_size = _GGUF_SCALAR_SIZE.get(elem)
+        if elem_size is not None:
+            return pos + elem_size * count
+        if elem == _GGUF_STRING:      # tokenizer vocab/merges: the big ones
+            for _ in range(count):
+                _, pos = _gguf_read_string(buf, pos)
+            return pos
+        raise ValueError("nested metadata array")
+    raise ValueError(f"unknown metadata type {vtype}")
+
+
+def gguf_integrity(path: str | Path) -> dict:
+    """Does the file actually hold the tensors its header declares?
+
+    A truncated download keeps a perfectly valid header - truncation happens
+    at the end - so the file lists fine and then dies at load, with the one
+    useful sentence ("model is corrupted or incomplete") printed by the C
+    library to stderr, where llama-cpp-python never puts it. Reading the
+    header here lets the tool say it itself, before anything is promised.
+
+    Returns ``{"ok": True, "tensors": n}``, ``{"ok": False, "reason": ...}``
+    for a file that cannot hold its own data, or ``{"ok": None, ...}`` when
+    the format is beyond this reader - an unverified file is never called
+    broken, because a wrong accusation is worse than no verdict.
+    """
+    path = Path(path)
+    try:
+        size = path.stat().st_size
+        with open(path, "rb") as fh:
+            if size == 0:
+                return {"ok": False, "reason": "empty file"}
+            with mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ) as buf:
+                return _gguf_check_header(buf, size)
+    except (OSError, ValueError) as exc:
+        return {"ok": None, "reason": f"unreadable: {exc}"}
+
+
+def _gguf_check_header(buf, size: int) -> dict:
+    try:
+        if bytes(buf[:4]) != b"GGUF":
+            return {"ok": None, "reason": "not a GGUF file"}
+        tensor_count, kv_count = struct.unpack_from("<QQ", buf, 8)
+        pos = 24
+        alignment = 32                      # general.alignment default
+        for _ in range(kv_count):
+            key, pos = _gguf_read_string(buf, pos)
+            (vtype,) = struct.unpack_from("<I", buf, pos)
+            pos += 4
+            if key == "general.alignment" and vtype == 4:   # u32
+                (alignment,) = struct.unpack_from("<I", buf, pos)
+            pos = _gguf_skip_value(buf, pos, vtype)
+        tensors: list[tuple[tuple[int, ...], int, int]] = []
+        for _ in range(tensor_count):
+            _, pos = _gguf_read_string(buf, pos)
+            (n_dims,) = struct.unpack_from("<I", buf, pos)
+            pos += 4
+            dims = struct.unpack_from(f"<{n_dims}Q", buf, pos)
+            pos += 8 * n_dims
+            ttype, offset = struct.unpack_from("<IQ", buf, pos)
+            pos += 12
+            tensors.append((dims, ttype, offset))
+    except (struct.error, ValueError, IndexError):
+        return {"ok": None, "reason": "header beyond this reader"}
+
+    if alignment <= 0:
+        return {"ok": None, "reason": f"implausible alignment {alignment}"}
+    data_start = -(-pos // alignment) * alignment
+    required = data_start
+    for dims, ttype, offset in tensors:
+        block = _GGML_TYPE_BLOCK.get(ttype)
+        if block is None:
+            return {"ok": None, "reason": f"unknown tensor type {ttype}"}
+        nbytes, per_block = block
+        elements = 1
+        for dim in dims:
+            elements *= dim
+        blocks = -(-elements // per_block)          # ceil
+        required = max(required, data_start + offset + blocks * nbytes)
+    if size < required:
+        return {"ok": False, "reason": (
+            f"truncated GGUF: needs {required} bytes, file is {size} "
+            f"({required - size} bytes missing - an incomplete download)")}
+    return {"ok": True, "tensors": len(tensors)}
+
+
+# ---------------------------------------------------------------------------
 # discovery: use what is already on disk, bounded, no network
 
 MAX_SCAN_DEPTH = 4
 MAX_SCAN_FILES = 200
 
 
+def _configured_gguf_dirs() -> list[Path]:
+    """``[llm] gguf_dirs`` from the resolved config layers, as paths.
+
+    ``RP_LLM__GGUF_DIRS`` is the *live* pin for one shell; this is the
+    *durable* one, so a model library registered in
+    ``~/.config/rebel-profiler/config.toml`` (or any other config layer)
+    is found from any working directory, not only from the tree the
+    checkpoint happens to sit under. A malformed config never breaks
+    discovery: it simply contributes no roots.
+    """
+    try:
+        from ..core.config import get, load_config
+
+        value = get(load_config(), "llm.gguf_dirs")
+    except Exception:
+        return []
+    if isinstance(value, str):
+        parts: list[str] = value.split(os.pathsep)
+    elif isinstance(value, (list, tuple)):
+        parts = [str(v) for v in value]
+    else:
+        return []
+    return [Path(p).expanduser() for p in parts if str(p).strip()]
+
+
 def default_gguf_roots() -> list[Path]:
     """Directories searched for local GGUF checkpoints, most specific first.
 
     ``RP_LLM__GGUF_DIRS`` (os.pathsep separated) always wins so an operator
-    can pin an arbitrary model library location.
+    can pin an arbitrary model library location; ``[llm] gguf_dirs`` in any
+    config layer is the durable equivalent of the same key.
     """
     roots: list[Path] = []
     for part in (os.environ.get("RP_LLM__GGUF_DIRS") or "").split(os.pathsep):
         part = part.strip()
         if part:
             roots.append(Path(part).expanduser())
+    roots.extend(_configured_gguf_dirs())
     cwd = Path.cwd()
     roots.append(cwd)
     for rel in ("models", "gguf", "weights", "dphn"):
@@ -185,6 +340,7 @@ def discover_local_gguf(*, roots: list[str | Path] | None = None,
                 size_bytes = path.stat().st_size
             except OSError:
                 size_bytes = 0
+            integrity = gguf_integrity(path)
             rows.append({
                 "path": str(path),
                 "name": path.name,
@@ -194,6 +350,8 @@ def discover_local_gguf(*, roots: list[str | Path] | None = None,
                 "params_b": gguf_params_b(path),
                 "size_gb": round(size_bytes / (1024 ** 3), 2),
                 "engine": "gguf",
+                "integrity_ok": integrity.get("ok"),
+                "integrity_note": integrity.get("reason", ""),
             })
     rows.sort(key=lambda r: (r["name"].lower(), r["path"]))
     return rows
@@ -344,7 +502,16 @@ class GgufEngine:
                        "was built for this platform.",
             ) from exc
         self.last_device = "gpu" if gpu_layers else "cpu"
-        self.guard.check_rss()
+        try:
+            self.guard.check_rss()
+        except ModelBudgetError:
+            # The ceiling is a *refusal*, not a licence to keep the weights:
+            # without this the refused checkpoint stays mapped (about 4GB for
+            # an 8B Q4) while the plane moves on to another engine, which
+            # breaks the one-engine-at-a-time rule and inflates every RSS
+            # reading the fallback then reports.
+            self.unload()
+            raise
 
     def unload(self) -> None:
         if self._llm is not None:

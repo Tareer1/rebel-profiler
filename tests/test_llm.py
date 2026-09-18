@@ -308,6 +308,75 @@ class TestPlanner:
         with pytest.raises(DependencyUnavailableError):
             planner(self._view())
 
+    def test_llm_planner_uses_engine_chat_template(self):
+        """Instruct checkpoints must receive their chat template, not raw text.
+
+        Regression: the planner sent the raw instruction prompt to the engine,
+        so a Qwen2.5/Llama instruct checkpoint degenerated (repeated single
+        characters) and every agent run failed to parse proposals.
+        """
+        import types
+
+        from rebel_profiler.llm.planner import LlmPlanner
+
+        captured = {}
+
+        class _ChatEngine:
+            loaded = True
+            model_id = "fake-instruct"
+
+            def chat_prompt(self, system, user):
+                captured["system"] = system
+                captured["user"] = user
+                return f"<|im_start|>system\n{system}<|im_end|>\n"
+
+            def generate(self, prompt, **kw):
+                captured["prompt"] = prompt
+                result = types.SimpleNamespace(
+                    text='[{"action": "passive-dns", '
+                         '"target": "lab.example.test", '
+                         '"params": {"record_type": "A"}, '
+                         '"reason": "resolve"}]')
+                return result
+
+        plane = ModelPlane(limits=DEFAULT_LIMITS["mid"])
+        plane._engine = _ChatEngine()
+        plane._engine_kind = "gguf"
+        plane.select_engine = lambda model, **kw: plane._engine   # already loaded
+        planner = LlmPlanner(plane,
+                             registry=_Registry({
+                                 "passive-dns": _Adapter("passive-dns",
+                                                         ["record_type"])}))
+        proposals = planner(self._view())
+        assert proposals and proposals[0].action == "passive-dns"
+        # the chat template was applied to the plan prompt
+        assert "<|im_start|>system" in captured["prompt"]
+        assert "lab.example.test" in captured["user"]
+
+    def test_plane_chat_generate_routes_through_template(self):
+        """ModelPlane.chat_generate applies the engine's chat_prompt."""
+        import types
+
+        captured = {}
+
+        class _ChatEngine:
+            loaded = True
+            model_id = "fake-instruct"
+
+            def chat_prompt(self, system, user):
+                return f"SYS[{system}] USER[{user}]"
+
+            def generate(self, prompt, **kw):
+                captured["prompt"] = prompt
+                return types.SimpleNamespace(text="ok")
+
+        plane = ModelPlane(limits=DEFAULT_LIMITS["mid"])
+        plane._engine = _ChatEngine()
+        plane._engine_kind = "gguf"
+        result = plane.chat_generate("be brief", "do the thing")
+        assert result.text == "ok"
+        assert captured["prompt"] == "SYS[be brief] USER[do the thing]"
+
 
 # ---------------------------------------------------------------- daemon
 

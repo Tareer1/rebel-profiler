@@ -180,7 +180,12 @@ class AutonomousEngineer:
                 if isinstance(plane.engine, TinyLlmEngine):
                     return None   # honest: no weights, no invented fixes
                 prompt = _repair_prompt(feedback, self.goal)
-                result = plane.generate(prompt, max_new_tokens=256)
+                # Instruct checkpoints degenerate on raw instruction text;
+                # route the repair request through the engine's chat template.
+                result = plane.chat_generate(
+                    "You repair Rebel Profiler action proposals. Reply with "
+                    "the corrected JSON proposal only.", prompt,
+                    max_new_tokens=256)
                 proposals = parse_repair_reply(result.text, registry)
                 return proposals[0] if proposals else None
             except (RPError, UsageError):

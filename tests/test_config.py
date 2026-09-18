@@ -58,6 +58,34 @@ def test_invalid_toml_is_config_error(tmp_path):
         load_config(environ={}, local_path=local)
 
 
+def test_user_config_layer_follows_home(tmp_path, monkeypatch):
+    """Relocating HOME relocates the user config layer.
+
+    Regression: the path was a module constant resolved at import time, so
+    the CLI test suite read the developer's real ``~/.config`` profile and its
+    tier/fit assertions silently depended on the machine running them.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    profile = tmp_path / ".config" / "rebel-profiler"
+    profile.mkdir(parents=True)
+    (profile / "config.toml").write_text('[llm]\ntier = "high"\n')
+    cfg = load_config(local_path=tmp_path / "none.toml")
+    assert get(cfg, "llm.tier") == "high"
+
+
+def test_user_config_is_not_read_from_an_unrelated_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "elsewhere"))
+    cfg = load_config(local_path=tmp_path / "none.toml")
+    assert get(cfg, "llm.tier") is None
+
+
+def test_user_config_path_honors_an_explicit_environ(tmp_path):
+    from rebel_profiler.core.config import user_config_path
+
+    assert user_config_path({"HOME": str(tmp_path)}) == (
+        tmp_path / ".config" / "rebel-profiler" / "config.toml")
+
+
 def test_get_dotted_paths():
     assert get(DEFAULTS, "evidence.redaction_enabled") is True
     assert get(DEFAULTS, "missing.path", "fallback") == "fallback"

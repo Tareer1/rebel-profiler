@@ -98,6 +98,46 @@ class TestDiscovery:
     def test_missing_path_returns_none(self):
         assert resolve_local_gguf("/nope/does-not-exist.gguf") is None
 
+    def test_configured_gguf_dirs_are_searched(self, monkeypatch, tmp_path):
+        """`[llm] gguf_dirs` makes a model library durable, not cwd-bound.
+
+        Regression: discovery only ever looked at RP_LLM__GGUF_DIRS and the
+        current directory, so a checkpoint registered in the user config was
+        invisible to every command run from elsewhere.
+        """
+        from rebel_profiler.core import config as config_mod
+
+        self._make(tmp_path, "Configured-3B-Q4_K_M.gguf")
+        monkeypatch.setattr(
+            config_mod, "load_config",
+            lambda **kw: {"llm": {"gguf_dirs": [str(tmp_path)]}})
+        names = {r["name"] for r in discover_local_gguf()}
+        assert "Configured-3B-Q4_K_M.gguf" in names
+
+    def test_configured_gguf_dirs_accept_pathsep_string(self, monkeypatch, tmp_path):
+        from rebel_profiler.core import config as config_mod
+
+        self._make(tmp_path, "Configured-3B-Q4_K_M.gguf")
+        monkeypatch.setattr(
+            config_mod, "load_config",
+            lambda **kw: {"llm": {"gguf_dirs": str(tmp_path)}})
+        names = {r["name"] for r in discover_local_gguf()}
+        assert "Configured-3B-Q4_K_M.gguf" in names
+
+    def test_broken_config_never_breaks_discovery(self, monkeypatch, tmp_path):
+        from rebel_profiler.core import config as config_mod
+
+        self._make(tmp_path, "Safe-3B-Q4_K_M.gguf")
+
+        def _explode(**kw):
+            raise RuntimeError("unreadable config")
+
+        monkeypatch.setattr(config_mod, "load_config", _explode)
+        monkeypatch.setenv("RP_LLM__GGUF_DIRS", str(tmp_path))
+        # an unreadable config contributes no roots; the env pin still applies
+        names = {r["name"] for r in discover_local_gguf()}
+        assert "Safe-3B-Q4_K_M.gguf" in names
+
 
 # ---------------------------------------------------------------- engine
 
@@ -204,6 +244,32 @@ class TestGgufEngine:
         info = engine.info()
         assert info["quant"] == "Q4_K_M" and info["engine"] == "gguf"
 
+    def test_refusal_after_load_releases_the_weights(self, monkeypatch, fake_llama,
+                                                     model_file):
+        """A budget refusal must not leave the checkpoint resident.
+
+        Regression: the guard checks RSS *after* llama.cpp mapped the file,
+        so the refusal raised while ~4GB of weights stayed loaded and the
+        plane fell back to another engine holding them.
+        """
+        from rebel_profiler.llm.budget import BudgetGuard
+
+        calls = {"n": 0}
+
+        def flaky_check_rss(self):
+            calls["n"] += 1
+            if calls["n"] >= 2:      # 1st = start-of-load, 2nd = post-load
+                raise ModelBudgetError(
+                    "LLM plane RSS 8889MB exceeds ceiling 8192MB")
+
+        monkeypatch.setattr(BudgetGuard, "check_rss", flaky_check_rss)
+        engine = GgufEngine(str(model_file), limits=DEFAULT_LIMITS["mid"])
+        with pytest.raises(ModelBudgetError) as excinfo:
+            engine.load()
+        # the honest budget message survives (not wrapped as a dep error)
+        assert "exceeds ceiling" in excinfo.value.message
+        assert engine.loaded is False       # the mapped weights were released
+
 
 class TestPlaneSelection:
     def test_explicit_gguf_pin_raises_without_binding(self, monkeypatch, model_file):
@@ -245,6 +311,100 @@ class TestPlaneSelection:
         plane.select_engine("Qwen/Qwen3-4B")
         assert plane.engine_kind == "tiny"
         plane.unload()
+
+    def test_failure_detail_keeps_the_taxonomy_reason(self):
+        """str(RPError) is only the message; the reason is the diagnosis."""
+        from rebel_profiler.llm.inference import _failure_detail
+
+        exc = DependencyUnavailableError(
+            "llama.cpp could not load 'x.gguf'",
+            reason="ValueError: model is corrupted or incomplete")
+        note = _failure_detail(exc)
+        assert "could not load 'x.gguf'" in note
+        assert "model is corrupted or incomplete" in note
+
+    def test_failure_detail_never_repeats_itself(self):
+        from rebel_profiler.llm.inference import _failure_detail
+
+        exc = DependencyUnavailableError(
+            "boom", reason="boom")
+        assert _failure_detail(exc) == "boom"
+
+    def test_fallback_note_reports_why_the_gguf_failed(self, monkeypatch, tmp_path):
+        """A corrupt checkpoint's real error must reach the operator.
+
+        Regression: the fallback note said only "llama.cpp could not load",
+        so a truncated download ("model is corrupted or incomplete") looked
+        like an unexplained engine failure.
+        """
+        path = tmp_path / "Corrupt-8B-Q4_K_M.gguf"
+        path.write_bytes(b"\0" * 2048)
+        monkeypatch.setenv("RP_LLM__GGUF_DIRS", str(tmp_path))
+
+        def _ragged_init(self, **kwargs):
+            raise ValueError(
+                "tensor 'blk.14.ffn_up.weight' data is not within the file "
+                "bounds, model is corrupted or incomplete")
+
+        module = types.ModuleType("llama_cpp")
+        module.Llama = type("Llama", (), {"__init__": _ragged_init})
+        module.llama_cpp = types.SimpleNamespace(
+            llama_supports_gpu_offload=lambda: False)
+        monkeypatch.setitem(sys.modules, "llama_cpp", module)
+        # stub airllm too: without the stub an installed airllm would start a
+        # real (network) load of the path
+        fake = types.ModuleType("airllm")
+
+        class _FakeAutoModel:
+            @staticmethod
+            def from_pretrained(*_a, **_kw):
+                raise RuntimeError("stubbed: no downloads in tests")
+
+        fake.AutoModel = _FakeAutoModel
+        monkeypatch.setitem(sys.modules, "airllm", fake)
+
+        plane = ModelPlane(limits=DEFAULT_LIMITS["mid"])
+        plane.select_engine(str(path))
+        assert plane.engine_kind == "tiny"
+        assert "corrupted or incomplete" in plane.fallback_reason
+        plane.unload()
+
+    def test_failed_load_releases_that_engine(self):
+        """One engine at a time is the law, failed attempts included."""
+
+        class _Engine:
+            loaded = False
+            unloads = 0
+
+            def load(self):
+                self.loaded = True       # holds weights, then refuses
+                raise ModelBudgetError("ceiling reached")
+
+            def unload(self):
+                self.loaded = False
+                self.unloads += 1
+
+        plane = ModelPlane(limits=DEFAULT_LIMITS["mid"])
+        engine = _Engine()
+        with pytest.raises(ModelBudgetError):
+            plane._load_or_release(engine)
+        assert engine.loaded is False and engine.unloads == 1
+
+    def test_successful_load_is_returned_untouched(self):
+        class _Engine:
+            loaded = False
+            unloads = 0
+
+            def load(self):
+                self.loaded = True
+
+            def unload(self):
+                self.unloads += 1
+
+        plane = ModelPlane(limits=DEFAULT_LIMITS["mid"])
+        engine = _Engine()
+        assert plane._load_or_release(engine) is engine
+        assert engine.loaded is True and engine.unloads == 0
 
 
 # ---------------------------------------------------------------- setup
@@ -320,6 +480,133 @@ class TestSetup:
 
         text = render_setup(setup_plan(limits=DEFAULT_LIMITS["mid"]))
         assert "LLM plane setup" in text and "Engines:" in text
+
+    def test_run_command_pins_the_tier_that_actually_runs(self, tmp_path, monkeypatch):
+        """A hint the tool's own guard refuses is worse than no hint.
+
+        Regression: `llm local` printed a run command with no --tier for a
+        checkpoint that does not fit the current tier, so the copy-pasted
+        command was refused by the very guard that printed it.
+        """
+        from rebel_profiler.llm.setup import local_models
+
+        mid, high = _with_fat_gguf(tmp_path, monkeypatch, "Midsized-8B-Q4_K_S.gguf")
+        row = next(r for r in mid["gguf"] if r["name"] == "Midsized-8B-Q4_K_S.gguf")
+        assert row["fits"] is False
+        assert row["run"].endswith("--tier high")
+        # at a tier that carries it there is nothing to pin
+        row_high = next(
+            r for r in high["gguf"] if r["name"] == "Midsized-8B-Q4_K_S.gguf")
+        assert row_high["fits"] is True
+        assert "--tier" not in row_high["run"]
+
+    def test_setup_next_step_is_a_command_that_runs(self, tmp_path, monkeypatch):
+        from rebel_profiler.llm.setup import setup_plan
+        from rebel_profiler.llm import gguf as gguf_mod
+
+        # hermetic: only the fat checkpoint exists, wherever this runs from
+        monkeypatch.setattr(gguf_mod, "default_gguf_roots", lambda: [tmp_path])
+        _with_fat_gguf(tmp_path, monkeypatch, "Midsized-8B-Q4_K_S.gguf")
+        plan = setup_plan(limits=DEFAULT_LIMITS["mid"])
+        step = next(s for s in plan["next_steps"] if "local checkpoint" in s)
+        assert "--tier high" in step
+        assert "Midsized-8B-Q4_K_S.gguf" in step
+
+
+# ---------------------------------------------------------------- integrity
+
+
+def _make_gguf(path, tensors, *, truncate: int = 0):
+    """Write a minimal but genuinely *valid* GGUF.
+
+    ``tensors`` is a list of ``(name, dims, ggml_type, data_bytes)``. The
+    header layout (magic, version, counts, tensor infos, 32-byte-aligned data
+    section) is what the integrity reader walks, so the fixture has to be real
+    rather than a stand-in blob of zeroes.
+    """
+    import struct as _s
+
+    def _string(text):
+        raw = text.encode()
+        return _s.pack("<Q", len(raw)) + raw
+
+    infos, blob, offset = b"", b"", 0
+    for name, dims, ttype, nbytes in tensors:
+        infos += _string(name) + _s.pack("<I", len(dims))
+        infos += _s.pack(f"<{len(dims)}Q", *dims)
+        infos += _s.pack("<IQ", ttype, offset)
+        blob += b"\0" * nbytes
+        offset += nbytes
+    body = (b"GGUF" + _s.pack("<I", 3)               # magic + version
+            + _s.pack("<Q", len(tensors)) + _s.pack("<Q", 0)   # counts
+            + infos)
+    raw = body + b"\0" * ((-len(body)) % 32) + blob     # aligned data start
+    path.write_bytes(raw[:-truncate] if truncate else raw)
+    return path
+
+
+class TestGgufIntegrity:
+    def test_valid_checkpoint_is_verified(self, tmp_path):
+        from rebel_profiler.llm.gguf import gguf_integrity
+
+        path = _make_gguf(tmp_path / "Good-2B-Q8_0.gguf",
+                          [("blk.0.weight", (32,), 8, 34)])
+        assert gguf_integrity(path) == {"ok": True, "tensors": 1}
+
+    def test_truncated_checkpoint_is_refused(self, tmp_path):
+        """A truncated download keeps a valid header and loses the tail.
+
+        Regression: such a file was listed as fitting and only failed at load,
+        with the reason printed by the C library where Python never sees it.
+        """
+        from rebel_profiler.llm.gguf import gguf_integrity
+
+        path = _make_gguf(tmp_path / "Cut-2B-Q8_0.gguf",
+                          [("blk.0.weight", (32,), 8, 34)], truncate=8)
+        verdict = gguf_integrity(path)
+        assert verdict["ok"] is False
+        assert "truncated" in verdict["reason"]
+
+    def test_unknown_format_is_unverified_not_broken(self, tmp_path):
+        """A wrong accusation is worse than no verdict."""
+        from rebel_profiler.llm.gguf import gguf_integrity
+
+        path = tmp_path / "opaque.gguf"
+        path.write_bytes(b"nope" * 8)
+        assert gguf_integrity(path)["ok"] is None
+
+    def test_empty_file_is_refused(self, tmp_path):
+        from rebel_profiler.llm.gguf import gguf_integrity
+
+        path = tmp_path / "empty.gguf"
+        path.write_bytes(b"")
+        assert gguf_integrity(path)["ok"] is False
+
+    def test_truncated_checkpoint_never_reads_as_fitting(self, tmp_path):
+        from rebel_profiler.llm.budget import DEFAULT_LIMITS
+        from rebel_profiler.llm.setup import local_models, render_local
+
+        _make_gguf(tmp_path / "Cut-2B-Q8_0.gguf",
+                   [("blk.0.weight", (32,), 8, 34)], truncate=8)
+        # even the widest tier cannot run a file that lost its own weights
+        payload = local_models(limits=DEFAULT_LIMITS["high"], roots=[tmp_path])
+        row = payload["gguf"][0]
+        assert row["integrity_ok"] is False
+        assert row["fits"] is False
+        text = render_local(payload)
+        assert "UNUSABLE" in text and "truncated" in text
+        assert "re-download" in text
+
+    def test_unverified_checkpoint_is_not_punished(self, tmp_path):
+        # a file this reader cannot parse keeps its budget verdict untouched
+        from rebel_profiler.llm.budget import DEFAULT_LIMITS
+        from rebel_profiler.llm.setup import local_models
+
+        (tmp_path / "Opaque-2B-Q4_K_M.gguf").write_bytes(b"\0" * 2048)
+        row = local_models(
+            limits=DEFAULT_LIMITS["high"], roots=[tmp_path])["gguf"][0]
+        assert row["integrity_ok"] is None
+        assert row["fits"] is True
 
 
 # ---------------------------------------------------------------- helpers

@@ -281,7 +281,12 @@ def _generate(prompt: str, *, model: str | None, plane: ModelPlane | None,
                 action="pip install llama-cpp-python (GGUF) or "
                        "'rebel-profiler[airllm]' (HF models), then re-run.",
             )
-        return plane.generate(prompt, max_new_tokens=max_new_tokens)
+        # Instruct checkpoints degenerate on raw instruction text; route the
+        # authoring request through the engine's own chat template.
+        return plane.chat_generate(
+            "You write exact, minimal Python for Rebel Profiler script jobs. "
+            "Reply with the requested code only.", prompt,
+            max_new_tokens=max_new_tokens)
     finally:
         if own:
             plane.unload()

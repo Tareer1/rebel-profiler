@@ -3,7 +3,8 @@
 Layers, in precedence order (lowest to highest):
   1. Built-in defaults
   2. System config   (e.g. /etc/rebel-profiler/config.toml)
-  3. User config     (e.g. ~/.config/rebel-profiler/config.toml)
+  3. User config     (e.g. ~/.config/rebel-profiler/config.toml — see
+                      :func:`user_config_path`; resolved per call)
   4. Local project   (./rebel-profiler.toml)
   5. Environment     (RP_* variables)
   6. CLI flags       (applied by the caller)
@@ -22,8 +23,22 @@ from pathlib import Path
 from ..core.errors import ConfigError
 
 SYSTEM_CONFIG = Path("/etc/rebel-profiler/config.toml")
-USER_CONFIG = Path.home() / ".config" / "rebel-profiler" / "config.toml"
 LOCAL_CONFIG = Path("rebel-profiler.toml")
+
+
+def user_config_path(environ: dict[str, str] | None = None) -> Path:
+    """The user config layer's path, resolved *now* rather than at import.
+
+    This is deliberately a function, not a constant: ``$HOME`` is read on
+    every call, so a caller that relocates it — a test sandbox, a container,
+    an operator's wrapper — gets *its* config instead of whichever one
+    happened to be in effect when this module was first imported. A constant
+    here made the CLI test suite read the developer's real ``~/.config``
+    profile, so its tier and fit verdicts depended on the machine running it.
+    """
+    env = os.environ if environ is None else environ
+    home = env.get("HOME") or Path.home()
+    return Path(home) / ".config" / "rebel-profiler" / "config.toml"
 
 PROTECTED_SECURITY_KEYS: tuple[tuple[str, str], ...] = (
     ("policy", "risk_to_outcome_mapping"),
@@ -161,7 +176,7 @@ def load_config(
     local = local_path if local_path is not None else LOCAL_CONFIG
     layers: list[tuple[str, dict]] = [("defaults", DEFAULTS)]
     layers.append(("system", _load_toml(SYSTEM_CONFIG, "system")))
-    layers.append(("user", _load_toml(USER_CONFIG, "user")))
+    layers.append(("user", _load_toml(user_config_path(environ), "user")))
     layers.append(("local", _load_toml(Path(local), "local")))
     if profile_path is not None:
         profile = Path(profile_path).expanduser()

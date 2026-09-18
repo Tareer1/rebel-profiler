@@ -185,8 +185,13 @@ class LlmPlanner:
         # came from a config profile, not the CLI) select_engine falls back to
         # the tier default — never generate with no engine loaded.
         self.plane.select_engine(self.model or "")
-        result = self.plane.generate(
-            prompt, max_new_tokens=self.max_new_tokens)
+        # Instruct checkpoints (Qwen2.5, Llama, …) degenerate on raw
+        # instruction text; send the plan request through the engine's own
+        # chat template so the model sees its trained role structure.
+        result = self.plane.chat_generate(
+            "You are the planner of Rebel Profiler. Follow the request "
+            "exactly and reply with the requested JSON only.", prompt,
+            max_new_tokens=self.max_new_tokens)
         self.last_result = result
         if isinstance(self.plane.engine, TinyLlmEngine):
             raise DependencyUnavailableError(
