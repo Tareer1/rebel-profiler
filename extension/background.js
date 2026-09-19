@@ -429,10 +429,20 @@ async function tick() {
   }
 }
 
-chrome.alarms.create("poll", { periodInMinutes: POLL_MS / 60000 });
+// Fast polling where the browser allows it (Chromium unpacked: 30s), plus a
+// 1-minute fallback alarm for engines that clamp fractional periods (Firefox),
+// plus a tick on tab activity so a fresh job is picked up promptly. The
+// running-guard inside tick() makes overlapping triggers harmless.
+try { chrome.alarms.create("poll", { periodInMinutes: POLL_MS / 60000 }); } catch (e) { /* clamped */ }
+try { chrome.alarms.create("poll1m", { periodInMinutes: 1 }); } catch (e) { /* unreachable */ }
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === "poll") tick();
+  if (alarm.name === "poll" || alarm.name === "poll1m") tick();
 });
+if (chrome.tabs && chrome.tabs.onUpdated) {
+  chrome.tabs.onUpdated.addListener((_tabId, info) => {
+    if (info.status === "loading" || info.status === "complete") tick();
+  });
+}
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg && msg.tick) tick();
   return false;
