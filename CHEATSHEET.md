@@ -23,10 +23,36 @@ rebel-profiler llm models                       # which models fit?
 
 # Shell completion + short alias (bash or zsh, once):
 source <repo>/completions/rebel-profiler.bash    # bash
-echo "alias rp='rebel-profiler'" >> ~/.zshrc     # then: rp doctor
 # zsh: copy completions/_rebel-profiler to a dir on your $fpath, or source it
 # from ~/.zshrc — Tab then completes subcommands, case ids and flags.
+
+# The friendly front door (recommended): install `rp` — see section 0b
+ln -sf "<repo>/tools/rp" ~/.local/bin/rp && export PATH="$HOME/.local/bin:$PATH"
 ```
+
+## 0b. `rp` — one command for everything (the daily driver)
+
+`tools/rp` wraps the whole workflow in plain commands — no case ids to
+copy, no engine flags, no queue paths. It finds the newest ACTIVE case
+itself, uses the pinned Hermes model from `hermes.toml`, and knows the
+bridge token location.
+
+```bash
+rp                        # live status panel: case, hermes, bridge, evidence + what next
+rp talk                   # talk to Hermes in plain language (interactive)
+rp talk "map example.com" # ...or hand it a goal directly
+rp scope add TARGET.com   # authorize a target + activate the case (one step)
+rp recon TARGET.com       # gated DNS (A/MX/TXT) + whois + cert-transparency + claims
+rp grab https://in.scope/ # view a page through the browser bridge (waits for the result)
+rp report                 # what was found so far
+rp verify                 # re-verify evidence + audit chains
+rp bridge                 # start the bridge if it is not running
+rp chat                   # power users: the raw hermes REPL
+```
+
+Everything `rp` does is the same gated machinery as the full CLI below —
+it only hides the ceremony. The raw `rebel-profiler` commands stay the
+source of truth for scripting and CI.
 
 ## 1. Case lifecycle (every job starts here)
 
@@ -166,11 +192,19 @@ rebel-profiler worker submit <case-id> <action> <target> -p k v
 rebel-profiler worker run <case-id> --interval 5
 rebel-profiler worker status <job-id>
 
-# The operator's own browser (load extension/ unpacked in Chrome first)
+# The operator's own browser — Chrome/Chromium: load extension/ unpacked;
+# Firefox (about:debugging → Load Temporary Add-on): the manifest ships an
+# event-page background for Gecko, then click "Grant site access" once in
+# the popup (Firefox gates host permissions behind a user grant) and paste
+# the bridge token. Extraction falls back to a background fetch of the
+# page's own HTML when injection is not granted — reported as
+# _mode: "fetch-fallback" in the result, never faked.
 rebel-profiler browser serve <case-id>          # 127.0.0.1:8765, token-gated
 rebel-profiler browser submit <case-id> https://in.scope/ --extract title,links,forms
 rebel-profiler browser submit <case-id> <url> --actions '[{"op":"click","selector":"#id"}]' --approved
 rebel-profiler browser result <job-id>
+
+# Or just: rp bridge (start it) / rp grab <url> (submit + wait + show)
 ```
 
 ## 8. Self-extension & privileged jobs
