@@ -23,3 +23,13 @@ models/
 *.gguf.part
 *.safetensors
 *.safetensors.part
+
+# Local guide/PDF drafts — workbench material, not part of the repo.
+docs/guide/drafts/
+
+# Generated artifacts
+*.pdf
+
+# Job profiles may hold machine-specific model paths (hermes.example.toml is
+# the committed template; copy it to hermes.toml and edit for your machine).
+hermes.toml

@@ -1,0 +1,20 @@
+# Hermes agent job profile — committed TEMPLATE.
+#
+# Copy this file to hermes.toml (gitignored) and edit the model path for your
+# machine, then run the Hermes agent with one short command:
+#
+#   cp hermes.example.toml hermes.toml
+#   $EDITOR hermes.toml
+#   rebel-profiler --config-file hermes.toml agent chat <case-id>            # interactive REPL
+#   rebel-profiler --config-file hermes.toml agent chat <case-id> "<goal>"   # one bounded loop
+#
+# Precedence: built-in tier defaults < this profile < RP_LLM__* env < explicit flags.
+# A local checkpoint is never silently substituted for a different model you
+# asked for, so pin the exact path you want.
+
+[llm]
+tier = "high"                 # tiny / low / mid / high — must cover the model below
+model = "/path/to/model.gguf" # a single GGUF file (llama.cpp / Ollama / LM Studio export)
+
+# [core]
+# actor = "hermes-operator"    # audit subject for the session (optional)
