@@ -117,7 +117,10 @@ class TestToolSchema:
         db, store, broker = env
         tools = {t["function"]["name"]: t for t in tool_schema(broker.adapters)}
         props = tools["dns-lookup"]["function"]["parameters"]["properties"]
-        assert set(props) == {"record_type"}
+        # ``target`` is declared on every tool: the broker gates on it for
+        # every action, so the schema must teach the model to send it.
+        assert set(props) == {"record_type", "target"}
+        assert tools["dns-lookup"]["function"]["parameters"]["required"] == ["target"]
 
 
 class TestChatML:
