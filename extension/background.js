@@ -363,4 +363,8 @@ chrome.runtime.onMessage.addListener((msg) => {
   return false;
 });
 chrome.runtime.onInstalled.addListener(tick);
+// Firefox event pages wake on browser start too (onInstalled does not fire).
+if (chrome.runtime.onStartup) {
+  chrome.runtime.onStartup.addListener(tick);
+}
 tick();
