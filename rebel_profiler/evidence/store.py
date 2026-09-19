@@ -80,7 +80,7 @@ class EvidenceStore:
         if not blob_path.exists():
             blob_path.parent.mkdir(parents=True, exist_ok=True)
             blob_path.write_bytes(data)
-        with self._db.conn:
+        with self._db.transaction():
             self._db.conn.execute(
                 "INSERT INTO evidence_records"
                 " (id, case_id, kind, sha256, size, created_at, source, note, prev_hash, meta_json)"

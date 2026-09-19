@@ -270,11 +270,16 @@ class BrowserBridge:
             ack_path.write_text(json.dumps(ack, indent=2, sort_keys=True) + "\n")
             if self.audit is not None:
                 self.audit.append(self.case_id, actor="browser-bridge",
-                                  action="job.claimed", subject="browser-extract",
+                                  action="job.claimed",
+                                  subject=envelope.get("action", "browser-extract"),
                                   detail={"job_id": job_id, "url": envelope["target"]})
         self._claimed[job_id] = envelope
         return {"job_id": job_id, "ack": envelope["seq"], "url": envelope["target"],
-                "extract": envelope["params"].get("extract", ["title", "links"])}
+                "extract": envelope["params"].get("extract", ["title", "links"]),
+                # The extension executes the interaction script from THIS claim
+                # payload; omitting it silently degraded interact jobs to
+                # read-only extracts.
+                "actions": envelope["params"].get("actions", [])}
 
     def complete(self, job_id: str, payload: dict) -> dict:
         """Extension posts results → ACK (result file + evidence + claims)."""

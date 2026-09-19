@@ -66,7 +66,9 @@ class AuditChain:
         detail: dict | None = None,
         at: float | None = None,
     ) -> AuditEvent:
-        with self._db.conn:
+        # The lock makes read-head + insert atomic even when the shared
+        # connection is used from several threads (browser bridge).
+        with self._db.transaction():
             prev = self._head_hash_locked(case_id)
             ts = time.time() if at is None else at
             payload = {
@@ -107,7 +109,7 @@ class AuditChain:
         return row["hash"] if row else self.GENESIS
 
     def head_hash(self, case_id: str) -> str:
-        with self._db.conn:
+        with self._db.transaction():
             return self._head_hash_locked(case_id)
 
     def events(self, case_id: str) -> list[AuditEvent]:

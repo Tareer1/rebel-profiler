@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -266,17 +267,49 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
 )
 
 
+class _LockedTransaction:
+    """``with db.transaction():`` — a lock-held, commit-on-success transaction.
+
+    On normal exit the transaction commits and the lock releases; on error
+    it rolls back and re-raises. The lock is released in every case.
+    """
+
+    def __init__(self, conn: sqlite3.Connection, lock: threading.Lock) -> None:
+        self._conn = conn
+        self._lock = lock
+
+    def __enter__(self) -> sqlite3.Connection:
+        self._lock.acquire()
+        return self._conn
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        try:
+            if exc_type is None:
+                self._conn.commit()
+            else:
+                self._conn.rollback()
+        finally:
+            self._lock.release()
+
+
 class Database:
     """A per-case (or per-workspace) SQLite store with migrations applied."""
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self.path))
+        # The connection may be shared across threads: the browser bridge
+        # (ThreadingHTTPServer) handles each request on its own thread with
+        # the case's single Database/EvidenceStore/AuditChain. Without this
+        # flag every /ack or /result POST crashed with ProgrammingError.
+        self._conn = sqlite3.connect(str(self.path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.execute("PRAGMA journal_mode = WAL")
         self._conn.execute("PRAGMA synchronous = FULL")
+        # A lock guards the shared connection: sqlite3 connections are
+        # thread-*allowed* with the flag above but not concurrent-safe.
+        self._write_lock = threading.Lock()
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -291,7 +324,24 @@ class Database:
 
     @property
     def conn(self) -> sqlite3.Connection:
+        """The shared connection. With ``check_same_thread=False`` any thread
+        may use it; SQLite's serialized mode (Debian default) guards single
+        statements, and :meth:`transaction` guards multi-statement sections.
+        """
         return self._conn
+
+    def transaction(self):
+        """Context manager: an exclusive, commit-on-success transaction.
+
+        Use this instead of bare ``with db.conn:`` wherever a case database
+        may be touched from more than one thread (browser bridge, API
+        gateway): the lock makes the whole critical section atomic, not
+        just individual statements.
+        """
+        return self._locked_transaction()
+
+    def _locked_transaction(self):
+        return _LockedTransaction(self._conn, self._write_lock)
 
     # -- migrations ----------------------------------------------------------
 

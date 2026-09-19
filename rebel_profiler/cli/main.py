@@ -1328,6 +1328,19 @@ def cmd_browser(ctx: AppContext, args: argparse.Namespace) -> int:
 
     from ..browser import BrowserBridge, BrowserJobStore
 
+    if args.browser_command == "result":
+        # Result files live in the workspace queue — no case lookup needed
+        # (and the result subcommand takes a job_id, not a case_id).
+        store = BrowserJobStore(ctx.data_dir / "queue")
+        result = store.load_result(args.job_id)
+        if result is None:
+            emit({"human": f"No result yet for {args.job_id} (extension may still be working).",
+                  "data": {"job_id": args.job_id, "state": "pending"}}, args.output)
+            return 1
+        emit({"human": f"Job {args.job_id}: {result.get('state')}"
+                       + (f" — {result.get('error', '')}" if result.get("error") else ""),
+              "data": result}, args.output)
+        return EXIT_SUCCESS if result.get("state") == "done" else 1
     rec = ctx.find_case(args.case_id)
     if args.browser_command == "submit":
         store = BrowserJobStore(ctx.data_dir / "queue")
@@ -1346,17 +1359,6 @@ def cmd_browser(ctx: AppContext, args: argparse.Namespace) -> int:
                        + (" [APPROVED]" if args.approved else ""),
               "data": envelope}, args.output)
         return EXIT_SUCCESS
-    if args.browser_command == "result":
-        store = BrowserJobStore(ctx.data_dir / "queue")
-        result = store.load_result(args.job_id)
-        if result is None:
-            emit({"human": f"No result yet for {args.job_id} (extension may still be working).",
-                  "data": {"job_id": args.job_id, "state": "pending"}}, args.output)
-            return 1
-        emit({"human": f"Job {args.job_id}: {result.get('state')}"
-                       + (f" — {result.get('error', '')}" if result.get("error") else ""),
-              "data": result}, args.output)
-        return EXIT_SUCCESS if result.get("state") == "done" else 1
     if args.browser_command == "serve":
         db = ctx.open_case(rec["id"])
         try:
