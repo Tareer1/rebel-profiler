@@ -23,11 +23,15 @@ import time
 import uuid
 from dataclasses import dataclass, field
 
+from ..core.errors import EXIT_USAGE, RPError
 from .claims import ClaimLedger
 
 
-class HypothesisError(Exception):
-    """Raised for malformed hypothesis criteria."""
+class HypothesisError(RPError):
+    """Raised for malformed hypothesis criteria (renders as a usage error)."""
+
+    exit_code = EXIT_USAGE
+    title = "Hypothesis error"
 
 
 @dataclass(frozen=True)

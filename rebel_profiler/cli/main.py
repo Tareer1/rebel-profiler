@@ -1054,6 +1054,26 @@ def cmd_schedule(ctx: AppContext, args: argparse.Namespace) -> int:
     from ..evidence.audit import AuditChain
     from ..execution.scheduler import Scheduler
 
+    if args.schedule_command == "tick":
+        # A tick is a global scheduler pass: schedules live in per-case
+        # databases, so sweep every active case in the workspace.
+        report = {"now": 0.0, "evaluated": 0, "results": []}
+        for case_rec in ctx.list_cases():
+            if case_rec.get("status") != "active":
+                continue
+            case_db = ctx.open_case(case_rec["id"])
+            try:
+                scheduler = Scheduler(case_db, ctx.broker(case_db), AuditChain(case_db))
+                case_report = scheduler.tick()
+            finally:
+                case_db.close()
+            report["now"] = case_report["now"]
+            report["evaluated"] += case_report["evaluated"]
+            report["results"].extend(case_report["results"])
+        emit({"human": f"Scheduler tick: {report['evaluated']} schedule(s) evaluated",
+              "data": report}, args.output)
+        return EXIT_SUCCESS
+
     rec = ctx.find_case(args.case_id)
     db = ctx.open_case(rec["id"])
     try:
@@ -1068,10 +1088,6 @@ def cmd_schedule(ctx: AppContext, args: argparse.Namespace) -> int:
             emit({"human": f"Schedule {record['schedule_id']} active"
                            f" (window: {record['not_before']} → {record['not_after']})",
                   "data": record}, args.output)
-        elif args.schedule_command == "tick":
-            report = scheduler.tick()
-            emit({"human": f"Scheduler tick: {report['evaluated']} schedule(s) evaluated",
-                  "data": report}, args.output)
         elif args.schedule_command == "pause":
             db.set_schedule_state(args.schedule_id, "paused")
             emit({"human": f"Schedule {args.schedule_id} paused.", "data": {"id": args.schedule_id}}, args.output)
