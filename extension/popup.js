@@ -33,3 +33,20 @@ $("poll").addEventListener("click", async () => {
     $("status").textContent = "tick failed: " + e.message;
   }
 });
+
+// Firefox MV3 keeps host permissions user-gated for temporary add-ons.
+// One click here unlocks page reading (Chromium ignores the origin pattern).
+$("grant").addEventListener("click", async () => {
+  try {
+    const granted = await chrome.permissions.request({
+      origins: ["http://*/*", "https://*/*"],
+    });
+    $("status").className = granted ? "ok" : "bad";
+    $("status").textContent = granted
+      ? "site access granted — pages readable"
+      : "grant denied — extraction falls back to fetch-only";
+  } catch (e) {
+    $("status").className = "bad";
+    $("status").textContent = "grant failed: " + e.message;
+  }
+});

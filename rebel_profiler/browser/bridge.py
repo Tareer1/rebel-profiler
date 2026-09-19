@@ -475,8 +475,12 @@ def make_handler(bridge: BrowserBridge, token: str):
                 self._json(404, {"error": "not found",
                                  "endpoints": ["/ack", "/result"]})
 
-        def log_message(self, fmt, *args):  # silence default stderr noise
-            return
+        def log_message(self, fmt, *args):
+            # One terse line per request on stderr: the bridge is the only
+            # place where the operator can SEE extension polling happening.
+            import sys
+            sys.stderr.write("bridge %s %s\n" % (self.command, self.path))
+            sys.stderr.flush()
 
     return BridgeHandler
 

@@ -106,6 +106,27 @@ function failResult(jobId, errorClass, message, fix) {
 }
 
 /**
+ * executeScript across engines: Chromium resolves an ARRAY of InjectionResult,
+ * Firefox resolves ONE InjectionResult object. Unwrap to the plain return
+ * value, and surface real errors instead of swallowing them into a shape
+ * that breaks destructuring downstream.
+ */
+async function executeScriptCompat(opts) {
+  let res;
+  try {
+    res = await chrome.scripting.executeScript(opts);
+  } catch (e) {
+    throw new Error("executeScript failed: " + String((e && e.message) || e).slice(0, 160));
+  }
+  const first = Array.isArray(res) ? res[0] : res;
+  if (!first) return null;
+  if (first.error) {
+    throw new Error("executeScript failed: " + String(first.error).slice(0, 160));
+  }
+  return first.result;
+}
+
+/**
  * Interaction executor: performs user-like actions (click/type/scroll/submit)
  * inside the page. Only ops validated by the bridge reach here; submit/navigate
  * jobs required operator approval before publication.
@@ -115,7 +136,7 @@ async function runInteractions(tabId, actions) {
   for (const step of actions || []) {
     const entry = { op: step.op, selector: step.selector || "", ok: false };
     try {
-      const [{ result } = {}] = await chrome.scripting.executeScript({
+      const result = await executeScriptCompat({
         target: { tabId },
         func: (step) => {
           const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -174,8 +195,9 @@ async function runInteractions(tabId, actions) {
 /** The read-only extractor set. */
 async function extractFromTab(tabId, extractors, url) {
   const data = {};
-  const [{ result: frameResult } = {}] = await chrome.scripting
-    .executeScript({
+  let frameResult = null;
+  try {
+    frameResult = await executeScriptCompat({
       target: { tabId },
       func: (wanted, maxText, maxLinks) => {
         const out = {};
@@ -220,8 +242,15 @@ async function extractFromTab(tabId, extractors, url) {
         return out;
       },
       args: [extractors, 20000, 300],
-    })
-    .catch((e) => ({ result: null }));
+    });
+  } catch (e) {
+    // Firefox MV3 gates host permissions behind a user grant; instead of
+    // failing the whole job, fall back to a CORS fetch of the page's own
+    // HTML and mark the mode honestly. Interactions still need the grant.
+    const fallback = await fetchFallback(url, extractors);
+    if (fallback) return fallback;
+    throw e;
+  }
 
   Object.assign(data, frameResult || {});
 
@@ -245,6 +274,52 @@ async function extractFromTab(tabId, extractors, url) {
     }
   }
   return data;
+}
+
+/**
+ * Fallback extraction: fetch the page's own HTML from the background and
+ * regex out the same fields. Only works where the page allows cross-origin
+ * reads (or the extension holds the host grant); mode is reported honestly.
+ */
+async function fetchFallback(url, extractors) {
+  try {
+    // Plain fetch first: it is the one a wildcard-ACAO server accepts.
+    // (A credentialed fetch rejects "*" and needs the host grant instead.)
+    let res;
+    try {
+      res = await fetch(url);
+    } catch {
+      res = await fetch(url, { credentials: "include" });
+    }
+    if (!res.ok) return null;
+    const html = (await res.text()).slice(0, 500000);
+    const out = { _mode: "fetch-fallback" };
+    const t = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+    if (t && extractors.includes("title")) out.title = t[1].trim().slice(0, 300);
+    if (extractors.includes("links")) {
+      const seen = new Set();
+      out.links = [];
+      const re = /<a\s[^>]*href\s*=\s*["']([^"'#]+)["']/gi;
+      let m;
+      while ((m = re.exec(html)) && out.links.length < 300) {
+        try {
+          const abs = new URL(m[1], url).href;
+          if (!seen.has(abs)) { seen.add(abs); out.links.push(abs); }
+        } catch { /* skip malformed */ }
+      }
+    }
+    if (extractors.includes("meta")) {
+      out.meta = {};
+      const re = /<meta\s[^>]*(?:name|property)\s*=\s*["']([^"']+)["'][^>]*content\s*=\s*["']([^"']*)["']/gi;
+      let m;
+      while ((m = re.exec(html)) && Object.keys(out.meta).length < 50) {
+        if (out.meta[m[1]] === undefined) out.meta[m[1]] = m[2];
+      }
+    }
+    return out;
+  } catch {
+    return null;
+  }
 }
 
 async function runJob(task) {
