@@ -68,10 +68,21 @@ bridge_up() {
 
 hermes_cmd() {
   # The one true entry: --config-file pins the local GGUF (hermes.toml).
+  # Multi-word goals stay one argument; value-taking flags consume their value.
+  local flags=() words=() goal="" next_is_value=0 a
+  for a in "$@"; do
+    if [ "$next_is_value" = 1 ]; then flags+=("$a"); next_is_value=0; continue; fi
+    case "$a" in
+      --llm|--model|--case|--max-turns) flags+=("$a"); next_is_value=1 ;;
+      -*) flags+=("$a") ;;
+      *) words+=("$a") ;;
+    esac
+  done
+  goal="${words[*]:-}"
   if [ -f "$REPO/hermes.toml" ]; then
-    exec "$RP" --config-file "$REPO/hermes.toml" hermes "$@"
+    exec "$RP" --config-file "$REPO/hermes.toml" hermes "${flags[@]}" ${goal:+"$goal"}
   fi
-  exec "$RP" hermes "$@"
+  exec "$RP" hermes "${flags[@]}" ${goal:+"$goal"}
 }
 
 # ------------------------------------------------------------- commands ---

@@ -1518,7 +1518,9 @@ def cmd_hermes(ctx: AppContext, args: argparse.Namespace, plane=None) -> int:
     now reachable by asking.
     """
     case_rec = _resolve_session_case(ctx, getattr(args, "case", ""))
-    goal = str(getattr(args, "goal", "") or "").strip()
+    goal_raw = getattr(args, "goal", "") or ""
+    goal = " ".join(goal_raw) if isinstance(goal_raw, list) else str(goal_raw)
+    goal = goal.strip()
     if not goal:
         return _hermes_repl(ctx, case_rec, args, plane=plane)
     # Hermes-agent CLI semantics: a query on a real TTY seeds an interactive
@@ -2903,8 +2905,9 @@ def build_parser() -> argparse.ArgumentParser:
                             help="the front door: chat with Hermes in plain language — "
                                  "cases, scope, recon, reports, browser, everything by "
                                  "prompting (no case-id ceremony)")
-    p_her.add_argument("goal", nargs="?", default="",
-                       help="omit for the interactive chat REPL")
+    p_her.add_argument("goal", nargs="*", default="",
+                       help="the goal in plain words — quotes optional; "
+                            "omit entirely for the interactive chat REPL")
     p_her.add_argument("--max-turns", type=int, default=8,
                        help="bounded agentic turns per message (default 8)")
     p_her.add_argument("--llm", "--model", dest="llm", default="", metavar="MODEL",
