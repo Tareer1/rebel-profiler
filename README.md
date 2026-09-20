@@ -257,6 +257,29 @@ as a `tool` role `<tool_response>`. Every executed call is hash-chained
 evidence, exactly like `agent run`. Bounded by `--max-turns` (default 8);
 no weights loaded → a structured refusal, never a hallucinated session.
 
+### The Front Door (`hermes`) — one command, everything by prompting
+
+`rebel-profiler hermes` (or `rp` on disk) is the whole CLI reduced to a
+cconversation. No case ids to copy, no subcommand maze: the session case is
+picked (or created) automatically, and the model holds the full operator
+tool surface — case create/activate, scope add/show, claims, report
+generation, evidence + audit verification, surface/fusion analysis, full-
+text search, the knowledge base and glossary, the browser bridge, and a
+status probe — alongside the gated adapter registry. Ask in plain
+language; the LLM proposes tool calls, the same gates decide, and the
+answer comes back from the model:
+
+```
+rebel-profiler hermes                                   # interactive chat REPL
+rebel-profiler hermes "authorize lab.example.test, collect its DNS and
+                        whois, then summarize what you found"
+```
+
+The same law applies: the model only calls tools that exist, every adapter
+call passes the six gates, and results re-enter the prompt redacted and
+bounded. The raw `rebel-profiler` commands stay the scripting/CI source of
+truth.
+
 ### The Autonomous Engineer (`agent auto`)
 
 One command, the LLM does the rest — repair and extend the tool itself:

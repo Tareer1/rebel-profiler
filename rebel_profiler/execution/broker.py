@@ -308,6 +308,11 @@ class ExecutionBroker:
     def adapters(self) -> AdapterRegistry:
         return self._adapters
 
+    @property
+    def scope_engine(self) -> ScopeEngine:
+        """The live scope engine this broker gates with (shared instance)."""
+        return self._scope
+
     def plan(self, request: ActionRequest) -> GateResult:
         """Run all gates up to (but not including) confirmation.
 

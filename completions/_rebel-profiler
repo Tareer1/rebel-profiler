@@ -9,6 +9,7 @@
 _rebel_profiler() {
     local -a commands
     commands=(
+        'hermes:the front door — chat with Hermes, everything by prompting'
         'case:case lifecycle (create, scope, activate, close)'
         'scope-check:check whether a target is in scope'
         'plan:dry-run an action through the policy gates'
@@ -63,6 +64,11 @@ _rebel_profiler() {
         args)
             # In the args state $words[1] is the top-level command.
             case $words[1] in
+                hermes)
+                    _arguments \
+                        '--llm[model id or checkpoint path]:model:' \
+                        '--case[case id (default: auto-picked)]:case:' \
+                        '--max-turns[cap on Hermes turns]:n:' ;;
                 case)
                     local -a case_sub
                     case_sub=('create:new case' 'list:list cases'

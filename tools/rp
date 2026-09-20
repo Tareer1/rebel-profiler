@@ -1,22 +1,25 @@
 #!/usr/bin/env bash
-# rp — Rebel Profiler, one friendly command.
+# rp — Rebel Profiler, ONE command. Everything else is just talking to Hermes.
 #
-#   rp            status + what you can do next
-#   rp talk       talk to Hermes in plain language (the main thing)
-#   rp chat       the raw hermes REPL (for power users)
-#   rp recon T    recon a target you are authorized to test
-#   rp grab URL   look at a page through the browser bridge
-#   rp report     everything found so far
-#   rp verify     prove the evidence is intact
-#   rp bridge     start the browser bridge if it is not running
+#   rp                  status panel: case, hermes model, bridge
+#   rp talk             chat REPL with Hermes — plain language, zero ceremony
+#   rp talk "<goal>"    one bounded hermes loop for that goal
+#   rp <anything…>      ANY other words are a PROMPT to Hermes, not a command:
+#                         rp recon example.com        → hermes plans + runs it
+#                         rp add *.lab.test to scope  → hermes authorizes it
+#                         rp show me the report       → hermes generates it
+#   rp bridge           start the browser bridge for the extension
+#
+# Case ids, scope entries, subcommand mazes — gone. The model holds the
+# operator tools (case/scope/report/verify/surface/browser) plus the gated
+# adapter registry, and answers in plain language.
 set -u
 
-REPO="/home/rebel/freebuff/rebel profiler"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RP="$REPO/.venv/bin/rebel-profiler"
 PY="$REPO/.venv/bin/python"
-CASES_DIR="$HOME/.local/share/rebel-profiler"
-TOKEN_FILE="/tmp/rp_bridge_token"
-BRIDGE_LOG="/tmp/rp_bridge.log"
+TOKEN_FILE="${RP_BRIDGE_TOKEN_FILE:-/tmp/rp_bridge_token}"
+BRIDGE_LOG="${RP_BRIDGE_LOG:-/tmp/rp_bridge.log}"
 COLOR=1
 
 c() { [ "$COLOR" = 1 ] && printf "\033[%sm" "$1"; }
@@ -29,10 +32,10 @@ blu()  { c 36; printf "%s" "$1"; c 0; }
 line() { dim "────────────────────────────────────────────────────────────"; }
 
 # ---------------------------------------------------------------- state ---
-active_case() {
-  # newest ACTIVE case id (works in human and json modes)
+newest_case() {
   "$RP" case list -o jsonl 2>/dev/null | "$PY" -c '
 import json, sys
+last, active = "", ""
 for line in sys.stdin:
     line = line.strip()
     if not line:
@@ -43,21 +46,15 @@ for line in sys.stdin:
         continue
     if isinstance(c, list):          # defensive: list-per-line exports
         c = c[0] if c else {}
+    cid = str(c.get("id", ""))
+    if not cid:
+        continue
+    last = cid
     if str(c.get("status", "")).lower() == "active":
-        print(c["id"]); sys.exit(0)
-sys.exit(1)'
+        active = cid
+print(active or last)
+'
 }
-
-any_case() { "$RP" case list -o jsonl 2>/dev/null | head -1 | "$PY" -c "
-import json,sys
-line = sys.stdin.read().strip()
-if not line: sys.exit(1)
-try: c = json.loads(line)
-except json.JSONDecodeError: sys.exit(1)
-if isinstance(c, list): c = c[0] if c else {}
-print(c.get('id',''))"; }
-
-bridge_pid() { pgrep -f "rebel-profiler browser serve" | head -1; }
 
 bridge_up() {
   local code
@@ -67,41 +64,42 @@ bridge_up() {
   [ "$code" = "200" ]
 }
 
-ensure_case() {
-  CASE=$(active_case)
-  if [ -z "$CASE" ]; then
-    CASE=$(any_case)
-    if [ -z "$CASE" ]; then
-      echo 1>&2 "$(red '✗') koi case nahi hai — ban raha hai…"
-      CASE=$("$RP" case create "My Work" "created by rp" -o json \
-             | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["data"]["id"])' 2>/dev/null) || {
-        echo 1>&2 "$(red '✗') case create fail"; exit 1; }
-    fi
-    echo 1>&2 "$(dim 'note:') case $CASE draft hai — scope add kar ke activate karo:"
-    echo 1>&2 "       rp scope add <target>   ; phir dobara chalao"
-    exit 2
+hermes_cmd() {
+  # The one true entry: --config-file pins the local GGUF (hermes.toml).
+  if [ -f "$REPO/hermes.toml" ]; then
+    exec "$RP" --config-file "$REPO/hermes.toml" hermes "$@"
   fi
-  echo "$CASE"
+  exec "$RP" hermes "$@"
 }
 
 # ------------------------------------------------------------- commands ---
 
 do_status() {
   line
-  echo "$(bold '        REBEL PROFILER')  $(dim '· rp')"
+  echo "$(bold '        REBEL PROFILER')  $(dim '· rp — one command, baqi sab prompting')"
   line
-  local CASE; CASE=$(active_case || true)
+  local CASE; CASE=$(newest_case || true)
   if [ -n "$CASE" ]; then
-    echo "  $(grn '●') case     $(bold "$CASE")  $(grn 'ACTIVE')"
-  else
-    CASE=$(any_case || true)
-    if [ -n "$CASE" ]; then
-      echo "  $(red '●') case     $CASE  $(red 'DRAFT — scope add karke activate karo')"
+    local status
+    status=$("$RP" case list -o jsonl 2>/dev/null | "$PY" -c "
+import json, sys
+for line in sys.stdin:
+    line = line.strip()
+    if not line: continue
+    try: c = json.loads(line)
+    except json.JSONDecodeError: continue
+    if isinstance(c, list): c = c[0] if c else {}
+    if str(c.get('id','')) == '$CASE':
+        print(c.get('status','?')); break
+" 2>/dev/null)
+    if [ "$status" = "active" ]; then
+      echo "  $(grn '●') case     $(bold "$CASE")  $(grn 'ACTIVE')"
     else
-      echo "  $(red '●') koi case nahi — $(bold 'rp scope add example.com') se sab shuru karo"
+      echo "  $(blu '●') case     $CASE  $(dim "$status — chat mein 'activate the case' bolo")"
     fi
+  else
+    echo "  $(dim '●') koi case nahi — pehli chat mein khud ban jayega"
   fi
-  # hermes model
   local model; model=$("$PY" - "$REPO" <<'EOF'
 import sys, tomllib
 try:
@@ -113,110 +111,17 @@ except Exception:
 EOF
 )
   echo "  $(blu '◆') hermes   $model"
-  # bridge
   if bridge_up; then
-    echo "  $(grn '●') bridge   127.0.0.1:8765  $(grn 'LIVE')  (Firefox extension se baat karega)"
+    echo "  $(grn '●') bridge   127.0.0.1:8765  $(grn 'LIVE')"
   else
-    echo "  $(red '●') bridge   down  — $(bold 'rp bridge') se start karo"
-  fi
-  # evidence summary
-  if [ -n "$CASE" ]; then
-    "$RP" evidence verify "$CASE" >/dev/null 2>&1 \
-      && echo "  $(grn '✓') evidence chain intact" \
-      || echo "  $(red '!') evidence chain problem — $(bold 'rp verify')"
+    echo "  $(red '●') bridge   down  — $(bold 'rp bridge')"
   fi
   line
-  echo "  $(bold 'kya kar sakte ho:')"
-  echo "    $(blu 'rp talk')        Hermes se baat karo, plain language mein"
-  echo "    $(blu 'rp scope add') TARGET   naya authorized target add karo"
-  echo "    $(blu 'rp recon') TARGET   recon chalao (dig/whois/curl, sab gated)"
-  echo "    $(blu 'rp grab') URL       page dekho (browser bridge hota hua)"
-  echo "    $(blu 'rp report')       jo mila uski summary"
-  echo "    $(blu 'rp verify')       evidence chain re-verify"
-  echo "    $(blu 'rp chat')        power-user hermes REPL"
+  echo "  $(bold 'bas itna yaad rakho:')"
+  echo "    $(blu 'rp talk')          chat kholo — plain language mein sab ho jata hai"
+  echo "    $(blu 'rp \"<goal>\"')    ek goal do — recon, scope, report, jo bolo"
+  echo "    $(blu 'rp bridge')        extension ke liye bridge start karo"
   line
-}
-
-do_scope() {
-  local sub="${1:-}"; shift || true
-  local CASE; CASE=$(ensure_case) || exit $?
-  case "$sub" in
-    add)
-      [ $# -lt 1 ] && { echo "usage: rp scope add <target>   (e.g. rp scope add example.com)"; exit 2; }
-      "$RP" case scope add "$CASE" "$1" --note "added via rp" \
-        && echo "$(grn '✓') scope: $1"
-      "$RP" case activate "$CASE" >/dev/null 2>&1 && echo "$(grn '✓') case ACTIVE"
-      ;;
-    list|show|"")
-      "$RP" case scope show "$CASE"
-      ;;
-    *)
-      echo "usage: rp scope [add <target>|list]"; exit 2 ;;
-  esac
-}
-
-do_talk() {
-  local CASE; CASE=$(ensure_case) || exit $?
-  local goal="${*:-}"
-  if [ -z "$goal" ]; then
-    echo "$(dim 'Hermes ko batao kya karna hai (khaali line = interact mode):')"
-  fi
-  exec "$RP" --config-file "$REPO/hermes.toml" agent chat "$CASE" $goal
-}
-
-do_chat() {
-  local CASE; CASE=$(ensure_case) || exit $?
-  exec "$RP" --config-file "$REPO/hermes.toml" agent chat "$CASE"
-}
-
-do_recon() {
-  [ $# -lt 1 ] && { echo "usage: rp recon <target>   (target scope mein hona chahiye)"; exit 2; }
-  local CASE; CASE=$(ensure_case) || exit $?
-  local T="$1"
-  echo "$(bold 'recon:') $T  $(dim '(har step policy-gated hai; scope ke bahar kuch nahi chalega)')"
-  "$RP" scope-check "$CASE" "$T" >/dev/null 2>&1 \
-    || { echo "$(red '✗') $T scope mein nahi hai. Pehle: $(bold "rp scope add $T")"; exit 5; }
-  echo "$(dim '── dns (A/AAAA/MX/TXT)')"
-  "$RP" intel collect "$CASE" dns-lookup "$T" -p record_type A  2>/dev/null | head -4
-  "$RP" intel collect "$CASE" dns-lookup "$T" -p record_type MX 2>/dev/null | head -4
-  "$RP" intel collect "$CASE" dns-lookup "$T" -p record_type TXT 2>/dev/null | head -4
-  echo "$(dim '── whois')"
-  "$RP" intel collect "$CASE" whois-lookup "$T" 2>/dev/null | head -6
-  echo "$(dim '── certificates (crt.sh)')"
-  "$RP" intel collect "$CASE" cert-transparency "$T" 2>/dev/null | head -4
-  echo "$(bold '── jo mila:')"
-  "$RP" intel claims "$CASE" 2>/dev/null | head -15
-  echo "$(dim 'poori detail: rp report')"
-}
-
-do_grab() {
-  [ $# -lt 1 ] && { echo "usage: rp grab <url>"; exit 2; }
-  local CASE; CASE=$(ensure_case) || exit $?
-  local URL="$1"
-  echo "$(bold 'grab:') $URL  $(dim '(Firefox extension ke through, scope-checked)')"
-  bridge_up || { echo "$(red '✗') bridge down — $(bold 'rp bridge') chalao pehle"; exit 7; }
-  local JOB; JOB=$("$RP" browser submit "$CASE" "$URL" --extract title,text,links -o json \
-    | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["data"]["job_id"])' 2>/dev/null) \
-    || { echo "$(red '✗') submit fail (scope?)"; exit 5; }
-  printf "  job %s  " "$JOB"
-  local Q="$CASES_DIR/queue/browser"
-  for i in $(seq 1 40); do
-    sleep 3
-    [ -f "$Q/$JOB.result.json" ] && break
-    printf "."; [ $((i % 10)) = 0 ] && printf " $(dim 'extension so raha hai? popup mein Run now dabao')"
-  done
-  echo
-  "$RP" browser result "$JOB" 2>/dev/null || echo "$(red '✗') result nahi aaya — extension dekh lo"
-}
-
-do_report() {
-  local CASE; CASE=$(ensure_case) || exit $?
-  "$RP" report "$CASE" "${1:--}" 2>/dev/null || "$RP" report "$CASE"
-}
-
-do_verify() {
-  local CASE; CASE=$(ensure_case) || exit $?
-  "$RP" evidence verify "$CASE" && "$RP" audit verify "$CASE"
 }
 
 do_bridge() {
@@ -224,17 +129,23 @@ do_bridge() {
     echo "$(grn '✓') bridge already live: 127.0.0.1:8765"
     return 0
   fi
+  local CASE; CASE=$(newest_case || true)
+  if [ -z "$CASE" ]; then
+    CASE=$("$RP" case create "rp workspace" "created by rp bridge" -o json \
+           | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["data"]["id"])' 2>/dev/null) || {
+      echo "$(red '✗') case create fail"; exit 1; }
+  fi
   [ -f "$TOKEN_FILE" ] || python3 -c 'import secrets; print("rp-"+secrets.token_hex(16))' > "$TOKEN_FILE"
   ( cd "$REPO" && setsid nohup env RP_BROWSER_TOKEN="$(cat "$TOKEN_FILE")" \
-      "$PY" -m rebel_profiler.cli.main browser serve "$(ensure_case)" \
-      > "$BRIDGE_LOG" 2>&1 < /dev/null & ) 
+      "$PY" -m rebel_profiler.cli.main browser serve "$CASE" \
+      > "$BRIDGE_LOG" 2>&1 < /dev/null & )
   for i in $(seq 1 10); do
     sleep 1
     bridge_up && break
   done
   if bridge_up; then
     echo "$(grn '✓') bridge live: 127.0.0.1:8765  (token: $TOKEN_FILE)"
-    echo "  Firefox extension popup mein wahi token paste karo"
+    echo "  extension popup mein wahi token paste karo"
   else
     echo "$(red '✗') bridge start nahi hua — log: $BRIDGE_LOG"
     exit 7
@@ -246,13 +157,7 @@ do_bridge() {
 cmd="${1:-status}"
 case "$cmd" in
   status|-h|--help|help) do_status ;;
-  talk)   shift; do_talk "$@" ;;
-  chat)   shift; do_chat "$@" ;;
-  scope)  shift; do_scope "$@" ;;
-  recon)  shift; do_recon "$@" ;;
-  grab)   shift; do_grab "$@" ;;
-  report) shift; do_report "$@" ;;
-  verify) shift; do_verify ;;
-  bridge) shift; do_bridge ;;
-  *) echo "unknown: $cmd — try: rp  (status)"; exit 2 ;;
+  talk)   shift; [ $# -gt 0 ] && hermes_cmd "$@" || hermes_cmd ;;
+  bridge) shift; do_bridge "$@" ;;
+  *)      hermes_cmd "$@" ;;   # anything else = a prompt to Hermes
 esac

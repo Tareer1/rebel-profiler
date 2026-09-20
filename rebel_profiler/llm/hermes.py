@@ -10,9 +10,11 @@ and hands the result back as a ``tool`` role message, one turn at a time.
 Rebel Profiler keeps its own law inside that pattern — *the LLM reasons, the
 system decides*:
 
-  * the model may only call tools that exist in the live adapter registry;
-  * every call becomes a :class:`Proposal` and passes the broker's six gates
-    exactly like a manual or planner-driven run;
+  * the model may only call tools that exist in the live adapter registry or
+    the operator tool registry (:mod:`rebel_profiler.llm.operator_tools`) —
+    the latter covers case/scope/report/verify/surface/browser operations;
+  * every adapter call becomes a :class:`Proposal` and passes the broker's
+    six gates exactly like a manual or planner-driven run;
   * tool output is redacted and truncated before it re-enters the prompt;
   * untrusted output is data, never instructions;
   * the loop is bounded (max turns + token budget), and the final answer is
@@ -38,6 +40,8 @@ from ..agent import Proposal
 from ..core.errors import DependencyUnavailableError, RPError, UsageError
 from ..core.redact import redact
 from .inference import ModelPlane, TinyLlmEngine
+from .operator_tools import OPERATOR_TOOLS, execute as _execute_operator_tool
+from .operator_tools import operator_schemas
 from .planner import _plane_from_env
 
 # Bounded prompt/output — the same budget discipline the planner applies.
@@ -281,7 +285,7 @@ class HermesAgentLoop:
     def __init__(self, case_id: str, goal: str, *, plane: ModelPlane,
                  broker, evidence, db, ledger=None,
                  max_turns: int = 8, max_new_tokens: int | None = None,
-                 registry=None) -> None:
+                 registry=None, ctx=None) -> None:
         self.case_id = case_id
         self.goal = redact(str(goal))[:GOAL_MAX_CHARS]
         self.plane = plane
@@ -289,6 +293,7 @@ class HermesAgentLoop:
         self.registry = registry or broker.adapters
         self.evidence = evidence
         self.db = db
+        self.ctx = ctx   # AppContext — powers the operator tools (may be None in tests)
         self.max_turns = max_turns
         self.max_new_tokens = max_new_tokens
         self.transcript: list[dict] = []
@@ -298,10 +303,21 @@ class HermesAgentLoop:
     # -- pieces -----------------------------------------------------------------
 
     def _tools_prompt(self) -> str:
-        return build_system_prompt(tool_schema(self.registry))
+        # Operator tools (case/scope/report/…) first, then the adapter
+        # registry — one merged <tools> block, same source of truth the
+        # dispatcher validates against.
+        return build_system_prompt(operator_schemas() + tool_schema(self.registry))
 
     def _execute_call(self, name: str, arguments: dict) -> dict:
-        """Gate + execute one tool call; returns the tool-role payload."""
+        """Gate + execute one tool call; returns the tool-role payload.
+
+        Operator tools (case/scope/report/…) dispatch first; anything else
+        must name a live adapter and goes through the broker's six gates.
+        """
+        if name in OPERATOR_TOOLS:
+            return _execute_operator_tool(
+                self.ctx, self.db, self.case_id, name, dict(arguments),
+                scope_engine=getattr(self.broker, "scope_engine", None))
         from ..execution.broker import ActionRequest
         from ..intel.claims import ClaimLedger
         from ..intel.collection import CollectionPipeline
@@ -443,6 +459,20 @@ class HermesAgentLoop:
 def adapter_capability(registry, name: str) -> str:
     adapter = registry.get(name)
     return getattr(adapter, "capability_class", "") or "hermes"
+
+
+def operator_tool_count() -> int:
+    """How many operator tools the merged surface offers (for REPL headers)."""
+    return len(OPERATOR_TOOLS)
+
+
+def tool_schemas_named(registry) -> list[tuple[str, str]]:
+    """(name, description) for the whole merged surface — REPL /tools view."""
+    rows = [(spec.name, spec.description)
+            for spec in OPERATOR_TOOLS.values()]
+    rows += [(t["function"]["name"], t["function"]["description"])
+             for t in tool_schema(registry)]
+    return rows
 
 
 def render_human(report: dict) -> str:

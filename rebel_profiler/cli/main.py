@@ -1436,7 +1436,7 @@ def cmd_agent_chat(ctx: AppContext, args: argparse.Namespace) -> int:
             loop = HermesAgentLoop(
                 rec["id"], args.goal, plane=plane,
                 broker=ctx.broker(db), evidence=ctx.evidence_store(db, rec["id"]),
-                db=db, max_turns=args.max_turns,
+                db=db, max_turns=args.max_turns, ctx=ctx,
             )
             report = loop.run()
         finally:
@@ -1467,16 +1467,24 @@ def _hermes_repl_plane():
 
 def _cmd_agent_chat_repl(ctx: AppContext, args: argparse.Namespace,
                          plane=None) -> int:
+    """`agent chat` entry: resolve the case, then run the shared Hermes REPL."""
+    return _hermes_repl(ctx, ctx.find_case(args.case_id), args, plane=plane)
+
+
+def _hermes_repl(ctx: AppContext, case_rec: dict, args: argparse.Namespace,
+                 plane=None) -> int:
     """Interactive Hermes chat: goals and questions, one gated loop per line.
 
     The engine is selected ONCE (heavy weights load a single time), every
     user line runs a bounded Hermes loop through the broker gates, and the
-    model is unloaded on exit so the machine goes quiet again.
+    model is unloaded on exit so the machine goes quiet again. The chat has
+    the full operator tool surface, so case + scope + reports are reachable
+    by plain language too — no case ids to copy, no shell round-trips.
     """
-    from ..llm.hermes import HermesAgentLoop, render_human, tool_schema
+    from ..llm.hermes import HermesAgentLoop, operator_tool_count, tool_schema
     from ..llm.inference import TinyLlmEngine
 
-    rec = ctx.find_case(args.case_id)
+    rec = case_rec
     db = ctx.open_case(rec["id"])
     plane = plane or _hermes_repl_plane()
     try:
@@ -1495,12 +1503,14 @@ def _cmd_agent_chat_repl(ctx: AppContext, args: argparse.Namespace,
                        "'llm local'), or use 'agent run --plan' for the "
                        "deterministic path.",
             )
-        tools = tool_schema(ctx.broker(db).adapters)
+        adapter_count = len(tool_schema(ctx.broker(db).adapters))
+        tools_total = adapter_count + operator_tool_count()
         engine = plane.engine_kind or "?"
         model = getattr(plane.engine, "model_id", "") or "?"
-        print(f"hermes interactive — case {rec['id']}  "
-              f"engine: {engine}  model: {model}  tools: {len(tools)}")
-        print("type a goal or question; /tools lists tools; /help; /exit quits")
+        print(f"hermes interactive — case {rec['id']} [{rec.get('status', '?')}]  "
+              f"engine: {engine}  model: {model}  tools: {tools_total}")
+        print("type a goal or question; /tools lists tools; /case shows the case; "
+              "/help; /exit quits")
         while True:
             try:
                 line = input("\nyou> ").strip()
@@ -1512,20 +1522,27 @@ def _cmd_agent_chat_repl(ctx: AppContext, args: argparse.Namespace,
             if line in {"/exit", "/quit", "quit", "exit", "q"}:
                 break
             if line == "/tools":
-                for tool in tools:
-                    fn = tool["function"]
-                    print(f"  {fn['name']:<22} {fn['description']}")
+                from ..llm.hermes import tool_schemas_named
+
+                for name, description in tool_schemas_named(
+                        ctx.broker(db).adapters):
+                    print(f"  {name:<22} {description}")
+                continue
+            if line == "/case":
+                print(f"  case {rec['id']} [{rec.get('status', '?')}] — "
+                      "ask 'show scope' or 'status' in chat for detail")
                 continue
             if line in {"/help", "help"}:
                 print("  <text>            run one Hermes loop toward that goal")
                 print("  /tools            list the tools the model may call")
+                print("  /case             which case this chat works on")
                 print("  /exit             unload the model and leave")
                 continue
             print("  hermes is working…")
             loop = HermesAgentLoop(
                 rec["id"], line, plane=plane,
                 broker=ctx.broker(db), evidence=ctx.evidence_store(db, rec["id"]),
-                db=db, max_turns=args.max_turns,
+                db=db, max_turns=args.max_turns, ctx=ctx,
             )
             report = loop.run()
             for call in report["calls"]:
@@ -1538,6 +1555,64 @@ def _cmd_agent_chat_repl(ctx: AppContext, args: argparse.Namespace,
     finally:
         plane.unload()   # the machine goes quiet again
         db.close()
+
+
+def _resolve_session_case(ctx: AppContext, want: str = "") -> dict:
+    """Pick the case a front-door session works on — zero ceremony.
+
+    Explicit --case wins; otherwise the newest ACTIVE case, else the newest
+    case of any status (the model can scope + activate it by chat); else a
+    fresh case is created so the very first chat just works.
+    """
+    if str(want or "").strip():
+        return ctx.find_case(str(want).strip())
+    cases = ctx.list_cases()
+    for rec in reversed(cases):
+        if rec.get("status") == "active":
+            return rec
+    if cases:
+        return cases[-1]
+    return ctx.create_case("Hermes Session", "created by the hermes front door")
+
+
+def cmd_hermes(ctx: AppContext, args: argparse.Namespace, plane=None) -> int:
+    """The Hermes front door: ONE command, plain language in, LLM answers out.
+
+    No case-id ceremony: the case is picked (or created) automatically, and
+    the model holds the operator tool surface — case + scope + reports +
+    verification + surface + fusion + browser + knowledge — alongside the
+    gated adapter registry. Everything the old CLI did by subcommand maze is
+    now reachable by asking.
+    """
+    case_rec = _resolve_session_case(ctx, getattr(args, "case", ""))
+    goal = str(getattr(args, "goal", "") or "").strip()
+    if not goal:
+        return _hermes_repl(ctx, case_rec, args, plane=plane)
+
+    from ..llm.budget import resolve_limits
+    from ..llm.hermes import HermesAgentLoop, render_human
+    from ..llm.inference import ModelPlane
+    from ..llm.planner import _plane_from_env
+
+    db = ctx.open_case(case_rec["id"])
+    prefer = os.environ.get("RP_LLM__ENGINE", "").strip().lower()
+    plane = plane or ModelPlane(
+        limits=resolve_limits(),
+        prefer_engine=prefer if prefer in {"tiny", "airllm", "external", "gguf", "native"} else None)
+    try:
+        if plane.engine is None:
+            plane.select_engine(_hermes_model_pin(ctx, args))
+        loop = HermesAgentLoop(
+            case_rec["id"], goal, plane=plane,
+            broker=ctx.broker(db), evidence=ctx.evidence_store(db, case_rec["id"]),
+            db=db, max_turns=args.max_turns, ctx=ctx,
+        )
+        report = loop.run()
+    finally:
+        plane.unload()   # the CLI process never stays heavy
+        db.close()
+    emit({"human": render_human(report), "data": report}, args.output)
+    return EXIT_SUCCESS
 
 
 def cmd_agent_work(ctx: AppContext, args: argparse.Namespace) -> int:
@@ -2878,6 +2953,21 @@ def build_parser() -> argparse.ArgumentParser:
                         help="use the LLM planner (AirLLM-mode) with this model")
     p_awrk.add_argument("--max-repair-attempts", type=int, default=2)
 
+    # hermes — the ONE front door: plain language in, everything by tool call
+    p_her = subs.add_parser("hermes", parents=[sub_common],
+                            help="the front door: chat with Hermes in plain language — "
+                                 "cases, scope, recon, reports, browser, everything by "
+                                 "prompting (no case-id ceremony)")
+    p_her.add_argument("goal", nargs="?", default="",
+                       help="omit for the interactive chat REPL")
+    p_her.add_argument("--max-turns", type=int, default=8,
+                       help="bounded agentic turns per message (default 8)")
+    p_her.add_argument("--llm", default="", metavar="MODEL",
+                       help="pin the model (default: config profile / engine default)")
+    p_her.add_argument("--case", default="",
+                       help="case id (default: newest ACTIVE case, else newest, "
+                            "else a fresh one is created)")
+
     # forge — LLM self-extension
     p_forge = subs.add_parser("forge", parents=[sub_common], help="Feature Forge: the LLM writes its own adapters (gated)")
     forge_subs = p_forge.add_subparsers(dest="forge_command", required=True)
@@ -3153,6 +3243,7 @@ def main(argv: list[str] | None = None) -> int:
             "audit": cmd_audit,
             "report": cmd_report,
             "agent": cmd_agent,
+            "hermes": cmd_hermes,
             "surface": cmd_surface,
             "member": cmd_member,
             "approval": cmd_approval,

@@ -30,29 +30,42 @@ source <repo>/completions/rebel-profiler.bash    # bash
 ln -sf "<repo>/tools/rp" ~/.local/bin/rp && export PATH="$HOME/.local/bin:$PATH"
 ```
 
-## 0b. `rp` — one command for everything (the daily driver)
+## 0b. `rp` — one command, everything by prompting (the daily driver)
 
-`tools/rp` wraps the whole workflow in plain commands — no case ids to
-copy, no engine flags, no queue paths. It finds the newest ACTIVE case
-itself, uses the pinned Hermes model from `hermes.toml`, and knows the
-bridge token location.
+`tools/rp` + `rebel-profiler hermes` is the whole CLI reduced to a
+cconversation. The session case is picked (or created) automatically, the
+pinned Hermes model from `hermes.toml` loads, and the model holds the full
+operator tool surface — case create/activate, scope add/show, claims,
+report generation, evidence + audit verification, surface/fusion, search,
+knowledge, glossary, the browser bridge and a status probe — next to the
+gated adapter registry. You ask; it proposes tool calls; the same gates
+decide; the answer comes from the model.
 
 ```bash
-rp                        # live status panel: case, hermes, bridge, evidence + what next
-rp talk                   # talk to Hermes in plain language (interactive)
-rp talk "map example.com" # ...or hand it a goal directly
-rp scope add TARGET.com   # authorize a target + activate the case (one step)
-rp recon TARGET.com       # gated DNS (A/MX/TXT) + whois + cert-transparency + claims
-rp grab https://in.scope/ # view a page through the browser bridge (waits for the result)
-rp report                 # what was found so far
-rp verify                 # re-verify evidence + audit chains
-rp bridge                 # start the bridge if it is not running
-rp chat                   # power users: the raw hermes REPL
+rp                        # status panel: case, hermes model, bridge
+rp talk                   # chat REPL with Hermes — plain language, zero ceremony
+rp talk "map example.com" # one bounded hermes loop for that goal
+rp recon TARGET.com       # NOT a command — it is a prompt: hermes plans + runs it
+rp add *.lab.test to scope "authorized"   # a prompt: hermes authorizes + activates
+rp show me the report     # a prompt: hermes generates it from the claims
+rp grab https://in.scope/ # a prompt: hermes grabs it through the browser bridge
+rp verify the evidence    # a prompt: hermes re-verifies evidence + audit chains
+rp bridge                 # start the browser bridge (extension ke liye)
+
+# Direct, without rp:
+rebel-profiler hermes                                   # interactive REPL
+rebel-profiler hermes "collect DNS A for lab.example.test and explain it"
+rebel-profiler --config-file hermes.toml hermes "..."   # pinned local GGUF
+rebel-profiler hermes --case <case-id> "..."            # explicit case (optional)
 ```
 
-Everything `rp` does is the same gated machinery as the full CLI below —
-it only hides the ceremony. The raw `rebel-profiler` commands stay the
-source of truth for scripting and CI.
+In the REPL: `/tools` lists every tool the model may call, `/case` shows
+the session case, `/exit` unloads the model.
+
+Everything the chat does is the same gated machinery as the full CLI below
+— six gates, scope engine, evidence chain, audit trail — it only hides the
+ceremony. The raw `rebel-profiler` commands stay the source of truth for
+scripting and CI.
 
 ## 1. Case lifecycle (every job starts here)
 

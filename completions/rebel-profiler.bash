@@ -9,10 +9,10 @@ _rebel_profiler() {
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
     # The global subcommand list — keep in sync with the CLI parser.
-    local commands="case scope-check plan run adapters knowledge report surface \
-intel evidence audit member approval hypothesis workflow schedule search \
-credential plugin events serve ops worker browser agent forge system detection \
-complaint llm bounty doctor"
+    local commands="hermes case scope-check plan run adapters knowledge report \
+surface intel evidence audit member approval hypothesis workflow schedule \
+search credential plugin events serve ops worker browser agent forge system \
+detection complaint llm bounty doctor"
 
     # --output choices
     if [[ "$prev" == "-o" || "$prev" == "--output" ]]; then
