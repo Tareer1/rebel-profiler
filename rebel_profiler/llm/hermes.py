@@ -467,6 +467,22 @@ class HermesAgentLoop:
                 "content": json.dumps(payload)[:TOOL_RESULT_MAX_CHARS],
             })
 
+        if not final_answer and self.calls:
+            # The model burned its budget on malformed replies after real
+            # work. The operator still gets an answer — a deterministic
+            # summary of what ACTUALLY executed, never model-invented text.
+            ok = [c for c in self.calls if not c.get("error")]
+            lines = [f"(the model could not produce a prose answer, but "
+                     f"{len(ok)} tool call(s) executed successfully:)"]
+            for c in self.calls[:8]:
+                state = "ok" if not c.get("error") else "failed"
+                target = c.get("target", "") or c.get("added", "") or ""
+                lines.append(f"  - {c.get('action', '')} {target} → {state}")
+            claims = sum(len(c.get("claims") or []) for c in ok)
+            if claims:
+                lines.append(f"  claims collected: {claims} — ask 'show the report' for detail")
+            final_answer = "\n".join(lines)
+
         return {
             "mode": "hermes-agent",
             "case_id": self.case_id,

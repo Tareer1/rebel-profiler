@@ -258,6 +258,18 @@ class TestHermesAgentLoop:
         assert len(report["calls"]) == 1   # only the first-turn call ran
         assert "turn budget exhausted" in report["final_answer"]
 
+    def test_budget_exhaustion_falls_back_to_executed_work_summary(self, env):
+        """No prose answer after real work → deterministic summary, never empty."""
+        call = ('<tool_call>{"name": "echo", "arguments": '
+                '{"target": "h1.lab.example.test", "message": "x"}}'
+                "</tool_call>")
+        fragment = 'cluded": false, "added_by": "Hermes"}'
+        loop, _ = make_loop([call, fragment], env, max_turns=3)
+        report = loop.run()
+        answer = report["final_answer"]
+        assert "echo h1.lab.example.test" in answer
+        assert "executed successfully" in answer
+
     def test_report_fields(self, env):
         loop, _ = make_loop(["finished"], env)
         report = loop.run()
