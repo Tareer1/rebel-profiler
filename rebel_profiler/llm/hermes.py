@@ -209,6 +209,24 @@ def strip_tool_call_blocks(reply: str) -> str:
     return _TOOL_CALL_RE.sub("", reply).strip()
 
 
+def _looks_like_json_fragment(text: str) -> bool:
+    """Detect a reply that is a JSON dump (or fragment of one), not prose.
+
+    Small models sometimes echo the last tool_response — often truncated
+    mid-object — instead of calling a tool or answering in words. Such text
+    must never stand as the final answer: it is a malformed tool-call
+    attempt, and the loop nudges the model instead of finishing.
+    """
+    t = text.strip()
+    if not t:
+        return False
+    if t[0] in "{[" or t.startswith("```"):
+        return True
+    # Truncated fragments start mid-object but still reek of JSON:
+    # several key:value pairs plus braces/brackets.
+    return t.count('":') >= 3 and (t.count("{") + t.count("[") + t.count("}")) >= 2
+
+
 def _validate_arguments(name: str, arguments: dict, registry) -> tuple[str, dict]:
     """Turn a parsed tool call into a validated Proposal-shaped (target, params)."""
     adapter = registry.get(name)
@@ -411,16 +429,20 @@ class HermesAgentLoop:
             })
             calls = parse_tool_calls(reply)
             if not calls:
-                final_answer = redact(strip_tool_call_blocks(
+                candidate = redact(strip_tool_call_blocks(
                     _strip_chat_tags(reply)))[:FINAL_MAX_CHARS]
-                if final_answer:
+                if candidate and not _looks_like_json_fragment(candidate):
+                    final_answer = candidate
                     break
-                # No call and no answer: nudge the model once per turn.
+                # No call and no answer — or a bare/truncated JSON dump
+                # (malformed tool-call attempt): nudge the model once per turn.
                 messages.append({"role": "assistant", "content": ""})
                 messages.append({
                     "role": "user",
-                    "content": ("Reply with exactly one <tool_call> toward the goal, "
-                                "or your final answer."),
+                    "content": ("That was not a valid reply. Respond with either "
+                                "exactly one <tool_call>{\"name\": …, "
+                                "\"arguments\": …}</tool_call> toward the goal, or "
+                                "your final answer in PLAIN TEXT — never bare JSON."),
                 })
                 continue
             if turn == self.max_turns:
@@ -486,7 +508,8 @@ def render_human(report: dict) -> str:
     ]
     for call in report["calls"]:
         state = "ok " if not call.get("error") else "err"
-        target = call.get("target", "")
+        target = (call.get("target", "") or call.get("added", "")
+                  or call.get("url", ""))
         lines.append(f"  [{call['turn']:>2}] {state}  {call.get('action', '')} {target}")
         if call.get("message"):
             lines.append(f"        {redact(str(call['message']))[:160]}")

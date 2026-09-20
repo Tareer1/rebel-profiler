@@ -332,6 +332,44 @@ def render_human_report(report):
     return render_human(report)
 
 
+# ---------------------------------------------------------------- JSON-fragment guard
+
+
+class TestJsonFragmentGuard:
+    """A reply that is bare/truncated JSON is a malformed tool-call attempt,
+    never a final answer: the loop nudges instead of finishing."""
+
+    def test_detects_bare_json(self):
+        from rebel_profiler.llm.hermes import _looks_like_json_fragment
+
+        assert _looks_like_json_fragment('{"id": 1, "value": "x"}')
+        assert _looks_like_json_fragment('[{"a": 1}]')
+        assert _looks_like_json_fragment('```json\n{"a": 1}\n```')
+
+    def test_detects_truncated_fragment(self):
+        from rebel_profiler.llm.hermes import _looks_like_json_fragment
+
+        frag = 'cluded": false}, {"id": 2, "case_id": "abc", "value": "x", "excluded":'
+        assert _looks_like_json_fragment(frag)
+
+    def test_plain_prose_is_not_json(self):
+        from rebel_profiler.llm.hermes import _looks_like_json_fragment
+
+        assert not _looks_like_json_fragment("I authorized example.com and found 2 records.")
+        assert not _looks_like_json_fragment("")
+
+    def test_loop_rejects_json_echo_and_nudges(self, env):
+        db, store, broker = env
+        fragment = ('cluded": false}, {"id": 2, "case_id": "c1", "value": '
+                    '"example.com", "excluded":')
+        plane = ScriptedPlane([fragment, "All done, plain answer."])
+        loop = HermesAgentLoop("c1", "goal", plane=plane, broker=broker,
+                               evidence=store, db=db, max_turns=4)
+        report = loop.run()
+        assert report["final_answer"] == "All done, plain answer."
+        assert "never bare JSON" in plane.prompts[1]
+
+
 # ---------------------------------------------------------------- interactive REPL
 
 
@@ -390,7 +428,8 @@ class TestAgentChatRepl:
             lines=["do a thing", "what happened?", "/exit"],
             env_fixture=env)
         assert rc == 0
-        assert "hermes interactive" in out
+        # the Hermes-agent-style banner greets the operator
+        assert "/help for commands" in out
         assert "hermes> Goal met." in out
         assert "hermes> Just answering." in out
 

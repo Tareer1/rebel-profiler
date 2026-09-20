@@ -59,8 +59,10 @@ rebel-profiler --config-file hermes.toml hermes "..."   # pinned local GGUF
 rebel-profiler hermes --case <case-id> "..."            # explicit case (optional)
 ```
 
-In the REPL: `/tools` lists every tool the model may call, `/case` shows
-the session case, `/exit` unloads the model.
+In the shell (cloned from the Hermes agent CLI — banner, registry-owned
+slash commands): `/help [filter]` `/status` `/model [name]` `/new [name]`
+`/case` `/tools [filter]` `/scope` `/clear` `/exit`. Plain language runs
+the agent loop; `hermes.toml` pins the default model.
 
 Hermes-agent CLI semantics: a goal on a real TTY seeds the interactive
 session (it answers, then keeps chatting); piped or `--oneshot` answers

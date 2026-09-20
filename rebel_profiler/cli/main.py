@@ -1473,97 +1473,21 @@ def _cmd_agent_chat_repl(ctx: AppContext, args: argparse.Namespace,
 
 def _hermes_repl(ctx: AppContext, case_rec: dict, args: argparse.Namespace,
                  plane=None, seed: str = "") -> int:
-    """Interactive Hermes chat: goals and questions, one gated loop per line.
+    """The Hermes shell (cloned from the Hermes agent CLI): banner, slash
+    commands, and one gated agent loop per plain-language line.
 
-    The engine is selected ONCE (heavy weights load a single time), every
-    user line runs a bounded Hermes loop through the broker gates, and the
-    model is unloaded on exit so the machine goes quiet again. The chat has
-    the full operator tool surface, so case + scope + reports are reachable
-    by plain language too — no case ids to copy, no shell round-trips.
-
-    ``seed`` runs first (Hermes-agent CLI behaviour: a query on a real TTY
-    opens the session and submits the query as its first turn), then the
-    prompt keeps accepting lines.
+    ``seed`` runs first (a query on a real TTY opens the session and
+    submits itself as the first turn), then the prompt keeps accepting
+    lines.
     """
-    from ..llm.hermes import HermesAgentLoop, operator_tool_count, tool_schema
-    from ..llm.inference import TinyLlmEngine
+    from ..llm.hermes_shell import run_repl
 
-    rec = case_rec
-    db = ctx.open_case(rec["id"])
-    plane = plane or _hermes_repl_plane()
-    try:
-        # Select only when the plane has no engine yet — a caller (or test
-        # double) may have pinned one deliberately.
-        if plane.engine is None:
-            plane.select_engine(_hermes_model_pin(ctx, args))
-        if isinstance(plane.engine, TinyLlmEngine):
-            from ..core.errors import DependencyUnavailableError
-
-            raise DependencyUnavailableError(
-                "Interactive Hermes needs real weights; only the tiny engine loaded",
-                reason=plane.fallback_reason,
-                action="Install an engine (pip install 'rebel-profiler[gguf]' or "
-                       "'rebel-profiler[airllm]'), pull a model ('llm setup', "
-                       "'llm local'), or use 'agent run --plan' for the "
-                       "deterministic path.",
-            )
-        adapter_count = len(tool_schema(ctx.broker(db).adapters))
-        tools_total = adapter_count + operator_tool_count()
-        engine = plane.engine_kind or "?"
-        model = getattr(plane.engine, "model_id", "") or "?"
-        print(f"hermes interactive — case {rec['id']} [{rec.get('status', '?')}]  "
-              f"engine: {engine}  model: {model}  tools: {tools_total}")
-        print("type a goal or question; /tools lists tools; /case shows the case; "
-              "/help; /exit quits")
-        pending = str(seed or "").strip()
-        while True:
-            if pending:
-                line, pending = pending, ""
-                print(f"\nyou> {line}")
-            else:
-                try:
-                    line = input("\nyou> ").strip()
-                except (EOFError, KeyboardInterrupt):
-                    print()
-                    break
-            if not line:
-                continue
-            if line in {"/exit", "/quit", "quit", "exit", "q"}:
-                break
-            if line == "/tools":
-                from ..llm.hermes import tool_schemas_named
-
-                for name, description in tool_schemas_named(
-                        ctx.broker(db).adapters):
-                    print(f"  {name:<22} {description}")
-                continue
-            if line == "/case":
-                print(f"  case {rec['id']} [{rec.get('status', '?')}] — "
-                      "ask 'show scope' or 'status' in chat for detail")
-                continue
-            if line in {"/help", "help"}:
-                print("  <text>            run one Hermes loop toward that goal")
-                print("  /tools            list the tools the model may call")
-                print("  /case             which case this chat works on")
-                print("  /exit             unload the model and leave")
-                continue
-            print("  hermes is working…")
-            loop = HermesAgentLoop(
-                rec["id"], line, plane=plane,
-                broker=ctx.broker(db), evidence=ctx.evidence_store(db, rec["id"]),
-                db=db, max_turns=args.max_turns, ctx=ctx,
-            )
-            report = loop.run()
-            for call in report["calls"]:
-                state = "ok " if not call.get("error") else "err"
-                print(f"  → [{state}] {call.get('action', '')} "
-                      f"{call.get('target', '')}")
-            answer = report.get("final_answer") or "(no answer — turn budget hit)"
-            print(f"hermes> {answer}")
-        return EXIT_SUCCESS
-    finally:
-        plane.unload()   # the machine goes quiet again
-        db.close()
+    if seed:
+        try:
+            args.goal_seed = seed
+        except AttributeError:
+            pass
+    return run_repl(ctx, case_rec, args, plane or _hermes_repl_plane())
 
 
 def _resolve_session_case(ctx: AppContext, want: str = "") -> dict:
