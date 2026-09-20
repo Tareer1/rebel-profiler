@@ -282,8 +282,9 @@ def _handler_tools(args: str, s: ShellSession) -> None:
         shown += 1
     if not shown:
         print(f"  {_dim('no tool matches: ' + args)}")
-    print(f"  {_dim(str(shown) + ' of ' + str(len(rows)) + ' tools ('
-                        + str(operator_tool_count()) + ' operator + adapters)')}")
+    summary = (f"{shown} of {len(rows)} tools "
+               f"({operator_tool_count()} operator + adapters)")
+    print(f"  {_dim(summary)}")
 
 
 def _handler_scope(args: str, s: ShellSession) -> None:
