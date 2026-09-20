@@ -106,20 +106,31 @@ def restore_case(backup_path: Path, dest_dir: Path) -> dict:
 
 def package_zipapp(source_dir: Path, out_path: Path,
                    *, main_module: str = "rebel_profiler.cli.main:main") -> dict:
-    """Build an executable .pyz of the project for offline use."""
+    """Build an executable .pyz of the project for offline use.
+
+    ``main_module`` is ``module:function``; the generated ``__main__.py``
+    imports the module and calls the function (so the entrypoint actually
+    runs instead of emitting a SyntaxError).
+    """
     source_dir = Path(source_dir)
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    module, _, func = main_module.partition(":")
+    func = func or "main"
+    # When packaging the package directory itself (the CLI passes the
+    # installed rebel_profiler/ dir), entries must keep the package name as
+    # the zip-path prefix or the generated __main__.py cannot import it.
+    prefix = (source_dir.name + "/") if (source_dir / "__init__.py").exists() else ""
     with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for path in sorted(source_dir.rglob("*.py")):
             rel = path.relative_to(source_dir)
             if any(part in {"__pycache__", ".git", ".pytest_cache", "tests"}
                    for part in rel.parts):
                 continue
-            zf.write(path, str(rel))
+            zf.write(path, prefix + str(rel))
         zf.writestr("__main__.py",
-                    f"import {main_module.split(':')[0]}\n"
-                    f"raise SystemExit({main_module}())\n")
+                    f"import {module}\n"
+                    f"raise SystemExit({module}.{func}())\n")
     return {"zipapp": str(out_path), "size": out_path.stat().st_size,
             "sha256": _sha256_file(out_path)}
 
