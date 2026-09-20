@@ -15,7 +15,9 @@
 # adapter registry, and answers in plain language.
 set -u
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Resolve symlinks (e.g. ~/.local/bin/rp) so the repo dir is found from PATH.
+_SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+REPO="$(cd "$(dirname "$_SELF")/.." && pwd)"
 RP="$REPO/.venv/bin/rebel-profiler"
 PY="$REPO/.venv/bin/python"
 TOKEN_FILE="${RP_BRIDGE_TOKEN_FILE:-/tmp/rp_bridge_token}"

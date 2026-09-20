@@ -2499,6 +2499,12 @@ def _params(pairs: list[list[str]] | None) -> dict:
 # Parser
 
 
+def _package_version() -> str:
+    import rebel_profiler
+
+    return getattr(rebel_profiler, "__version__", "?")
+
+
 def build_parser() -> argparse.ArgumentParser:
     # Root-level flags carry the defaults; subparser copies use SUPPRESS so
     # they never clobber values given before the subcommand.
@@ -2525,6 +2531,8 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[common],
         description="Kali Linux cybersecurity intelligence & authorized security operations framework.",
     )
+    parser.add_argument("--version", action="version",
+                        version=f"rebel-profiler {_package_version()}")
     subs = parser.add_subparsers(dest="group")
 
     # case
