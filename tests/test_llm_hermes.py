@@ -351,6 +351,8 @@ class TestJsonFragmentGuard:
 
         frag = 'cluded": false}, {"id": 2, "case_id": "abc", "value": "x", "excluded":'
         assert _looks_like_json_fragment(frag)
+        tail = 'false, "added_by": "Hermes", "added_at": "2023-04-15"}'
+        assert _looks_like_json_fragment(tail)
 
     def test_plain_prose_is_not_json(self):
         from rebel_profiler.llm.hermes import _looks_like_json_fragment
