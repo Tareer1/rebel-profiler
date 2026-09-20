@@ -1472,7 +1472,7 @@ def _cmd_agent_chat_repl(ctx: AppContext, args: argparse.Namespace,
 
 
 def _hermes_repl(ctx: AppContext, case_rec: dict, args: argparse.Namespace,
-                 plane=None) -> int:
+                 plane=None, seed: str = "") -> int:
     """Interactive Hermes chat: goals and questions, one gated loop per line.
 
     The engine is selected ONCE (heavy weights load a single time), every
@@ -1480,6 +1480,10 @@ def _hermes_repl(ctx: AppContext, case_rec: dict, args: argparse.Namespace,
     model is unloaded on exit so the machine goes quiet again. The chat has
     the full operator tool surface, so case + scope + reports are reachable
     by plain language too — no case ids to copy, no shell round-trips.
+
+    ``seed`` runs first (Hermes-agent CLI behaviour: a query on a real TTY
+    opens the session and submits the query as its first turn), then the
+    prompt keeps accepting lines.
     """
     from ..llm.hermes import HermesAgentLoop, operator_tool_count, tool_schema
     from ..llm.inference import TinyLlmEngine
@@ -1511,12 +1515,17 @@ def _hermes_repl(ctx: AppContext, case_rec: dict, args: argparse.Namespace,
               f"engine: {engine}  model: {model}  tools: {tools_total}")
         print("type a goal or question; /tools lists tools; /case shows the case; "
               "/help; /exit quits")
+        pending = str(seed or "").strip()
         while True:
-            try:
-                line = input("\nyou> ").strip()
-            except (EOFError, KeyboardInterrupt):
-                print()
-                break
+            if pending:
+                line, pending = pending, ""
+                print(f"\nyou> {line}")
+            else:
+                try:
+                    line = input("\nyou> ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    print()
+                    break
             if not line:
                 continue
             if line in {"/exit", "/quit", "quit", "exit", "q"}:
@@ -1588,6 +1597,10 @@ def cmd_hermes(ctx: AppContext, args: argparse.Namespace, plane=None) -> int:
     goal = str(getattr(args, "goal", "") or "").strip()
     if not goal:
         return _hermes_repl(ctx, case_rec, args, plane=plane)
+    # Hermes-agent CLI semantics: a query on a real TTY seeds an interactive
+    # session; piped/oneshot answers once and exits.
+    if not getattr(args, "oneshot", False) and sys.stdin.isatty():
+        return _hermes_repl(ctx, case_rec, args, plane=plane, seed=goal)
 
     from ..llm.budget import resolve_limits
     from ..llm.hermes import HermesAgentLoop, render_human
@@ -2962,11 +2975,13 @@ def build_parser() -> argparse.ArgumentParser:
                        help="omit for the interactive chat REPL")
     p_her.add_argument("--max-turns", type=int, default=8,
                        help="bounded agentic turns per message (default 8)")
-    p_her.add_argument("--llm", default="", metavar="MODEL",
+    p_her.add_argument("--llm", "--model", dest="llm", default="", metavar="MODEL",
                        help="pin the model (default: config profile / engine default)")
     p_her.add_argument("--case", default="",
                        help="case id (default: newest ACTIVE case, else newest, "
                             "else a fresh one is created)")
+    p_her.add_argument("--oneshot", action="store_true",
+                       help="answer the goal and exit even on a TTY")
 
     # forge — LLM self-extension
     p_forge = subs.add_parser("forge", parents=[sub_common], help="Feature Forge: the LLM writes its own adapters (gated)")

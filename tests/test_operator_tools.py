@@ -335,21 +335,18 @@ class TestFrontDoor:
         assert "Plain-language answer from the model." in out
         assert "hermes agent session" in out
 
-    def test_one_shot_on_empty_workspace_creates_case(self, tmp_path, capsys):
+    def test_one_shot_on_empty_workspace_creates_case(self, tmp_path, capsys,
+                                                       monkeypatch):
         ctx = AppContext(data_dir=tmp_path)
         plane = ScriptedPlane(["hi there"])
         args = SimpleNamespace(goal="", case="", max_turns=4, llm="",
                                output="human")
-        # no goal → REPL; feed EOF immediately by monkeypatching input
-        import builtins
 
+        # no goal → REPL; feed EOF immediately
         def fake_input(prompt=""):
             raise EOFError
 
-        builtins.input = fake_input
-        try:
-            rc = cmd_hermes(ctx, args, plane=plane)
-        finally:
-            del builtins.input
+        monkeypatch.setattr("builtins.input", fake_input)
+        rc = cmd_hermes(ctx, args, plane=plane)
         assert rc == 0
         assert len(ctx.list_cases()) == 1   # the session case was created

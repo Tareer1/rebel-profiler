@@ -62,6 +62,10 @@ rebel-profiler hermes --case <case-id> "..."            # explicit case (optiona
 In the REPL: `/tools` lists every tool the model may call, `/case` shows
 the session case, `/exit` unloads the model.
 
+Hermes-agent CLI semantics: a goal on a real TTY seeds the interactive
+session (it answers, then keeps chatting); piped or `--oneshot` answers
+once and exits — so scripts get one answer, terminals get a conversation.
+
 Everything the chat does is the same gated machinery as the full CLI below
 — six gates, scope engine, evidence chain, audit trail — it only hides the
 ceremony. The raw `rebel-profiler` commands stay the source of truth for
