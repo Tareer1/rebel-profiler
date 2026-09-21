@@ -249,6 +249,162 @@ def _parse_dork_hits(stdout: str, *, engine: str, dork: str
     return pairs
 
 
+_HOST_LINE = re.compile(r"^([A-Za-z0-9*_-]{1,80}(?:\.[A-Za-z0-9*_-]+)+)\s*$")
+_EMAIL_LINE = re.compile(r"([A-Za-z0-9._%+-]{1,64}@([A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,}))")
+
+
+def _parse_subdomain_lines(stdout: str, subject: str) -> list[tuple[str, str]]:
+    """amass passive output: one FQDN per line (spinner goes to stderr).
+
+    Only hostnames inside (or wildcarded under) the queried domain become
+    claims — a data source returning unrelated hosts is noise, not scope.
+    """
+    base = subject.lower().lstrip("*.").split(".")[-2:]  # registrable tail
+    tail = ".".join(base)
+    pairs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for line in stdout.splitlines():
+        m = _HOST_LINE.match(line.strip())
+        if not m:
+            continue
+        host = m.group(1).lower()
+        if host in seen:
+            continue
+        if not (host == tail or host.endswith("." + tail)):
+            continue
+        seen.add(host)
+        pairs.append(("hostname", host))
+    return pairs
+
+
+def _parse_harvester(stdout: str, subject: str) -> list[tuple[str, str]]:
+    """theHarvester console output: 'Emails found' / 'Hosts found' sections."""
+    pairs: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for match in _EMAIL_LINE.finditer(stdout):
+        email, domain = match.group(1).lower(), match.group(2).lower()
+        if ("email", email) in seen:
+            continue
+        seen.add(("email", email))
+        pairs.append(("email", email))
+        if domain.endswith("." + subject.lower()) or domain == subject.lower():
+            if ("hostname", domain) not in seen:
+                seen.add(("hostname", domain))
+                pairs.append(("hostname", domain))
+    for m in _HOST_LINE.finditer(stdout):
+        host = m.group(1).lower()
+        if ("hostname", host) in seen:
+            continue
+        if host.endswith("." + subject.lower()) or host == subject.lower():
+            seen.add(("hostname", host))
+            pairs.append(("hostname", host))
+    return pairs
+
+
+def _parse_ffuf(stdout: str) -> list[tuple[str, str]]:
+    """ffuf JSON (-of json -o -): results[] with input.FUZZ + status + url."""
+    pairs: list[tuple[str, str]] = []
+    # The runner may interleave ANSI progress frames; the JSON object is the
+    # payload — find the last one that parses.
+    start = stdout.find('{"commandline"')
+    if start < 0:
+        return pairs
+    try:
+        data = json.loads(stdout[start:])
+    except json.JSONDecodeError:
+        return pairs
+    for row in (data.get("results") or [])[:100]:
+        if not isinstance(row, dict):
+            continue
+        fuzz = str((row.get("input") or {}).get("FUZZ", "")).strip()
+        status = row.get("status")
+        url = str(row.get("url", ""))
+        if not fuzz and not url:
+            continue
+        value = f"/{fuzz} [{status}]" if fuzz else f"{url} [{status}]"
+        pairs.append(("web_path", value))
+    return pairs
+
+
+def _parse_whatweb(stdout: str) -> list[tuple[str, str]]:
+    """whatweb default output: url [plugins...] — extract Plugin[value] pairs."""
+    pairs: list[tuple[str, str]] = []
+    for line in stdout.splitlines():
+        if "[" not in line:
+            continue
+        for pm in re.finditer(r"([A-Za-z0-9 ._-]{2,40})(?:\[([^\]]{0,120})\])?",
+                              line.split("]", 1)[-1] if line.startswith("http") else line):
+            plugin, val = pm.group(1).strip(), pm.group(2)
+            if not plugin:
+                continue
+            pairs.append(("tech", f"{plugin}={val}" if val else plugin))
+        break   # one target per run; first line carries everything
+    # dedupe, bounded
+    out, seen = [], set()
+    for kind, value in pairs:
+        if (kind, value) in seen:
+            continue
+        seen.add((kind, value))
+        out.append((kind, value))
+    return out[:40]
+
+
+def _parse_dnsrecon(stdout: str) -> list[tuple[str, str]]:
+    """dnsrecon console output: 'TYPE name value' INFO lines.
+
+    dnsrecon logs to stderr, but the broker passes stdout and stderr merged
+    through this parser — negative lines ("No SRV Records Found", "No answer
+    for DNSSEC") must not become fake records, so each match must carry an
+    explicit value token after the record name.
+    """
+    pairs: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for line in stdout.splitlines():
+        if not line.strip():
+            continue
+        # Negative results are logged at ERROR/WARNING ("No SRV Records
+        # Found", "No answer for DNSSEC"); data records are INFO lines.
+        if "ERROR" in line or "WARNING" in line:
+            continue
+        # Require TYPE + name + value: bare 'TYPE name' lines are noise
+        # ("Enumerating SRV Records").
+        m = re.search(r"\b(SOA|NS|MX|A|AAAA|TXT|SRV|CNAME|PTR)\s+"
+                      r"([A-Za-z0-9._-]{1,253})\s+"
+                      r"([0-9a-fA-F:.]{1,45}|[A-Za-z0-9._-]{1,253})", line)
+        if not m:
+            continue
+        rtype, name, value = m.group(1), m.group(2), m.group(3)
+        if value.rstrip(".") == name.rstrip("."):
+            continue   # SOA self-reference style echo, not a data record
+        rec = f"{name} {value}"
+        key = (rtype, rec)
+        if key in seen:
+            continue
+        seen.add(key)
+        pairs.append((f"dns_{rtype.lower()}", rec))
+    return pairs[:60]
+
+
+def _parse_wafw00f(stdout: str) -> list[tuple[str, str]]:
+    """wafw00f: '[+] The site … is behind <Name> WAF.' or nothing found.
+
+    Generic-detection output ("seems to be behind a WAF or some sort of
+    security solution") is still a real signal — recorded as ``waf generic``
+    with the detection reason when present.
+    """
+    pairs: list[tuple[str, str]] = []
+    m = re.search(r"is behind\s+(.+?)\s+WAF", stdout)
+    if m:
+        pairs.append(("waf", m.group(1).strip()))
+    elif re.search(r"seems to be behind a WAF", stdout, re.I):
+        reason = re.search(r"Reason:\s*(.+)", stdout)
+        detail = reason.group(1).strip()[:120] if reason else "generic detection"
+        pairs.append(("waf", f"generic ({detail})"))
+    elif re.search(r"No WAF (detected|found)|seems to be behind no WAF", stdout, re.I):
+        pairs.append(("waf", "none detected"))
+    return pairs
+
+
 def _parse_ct_json(stdout: str, *, limit: int = 50) -> list[tuple[str, str]]:
     """Parse crt.sh JSON output into (kind, value) pairs.
 
@@ -397,6 +553,19 @@ class CollectionPipeline:
             pairs = _parse_dork_hits(stdout,
                                      engine=str(effective_params.get("engine", "google")),
                                      dork=str(effective_params.get("dork", "")))
+        elif effective_action == "subdomain-enum":
+            pairs = _parse_subdomain_lines(stdout, subject)
+        elif effective_action == "email-osint":
+            pairs = _parse_harvester(stdout, subject)
+        elif effective_action == "dir-enum":
+            pairs = _parse_ffuf(stdout)
+        elif effective_action == "tech-fingerprint":
+            pairs = _parse_whatweb(stdout)
+        elif effective_action == "dns-enum":
+            # dnsrecon logs its findings to stderr — parse the merged stream
+            pairs = _parse_dnsrecon(stdout + "\n" + stderr)
+        elif effective_action == "waf-detect":
+            pairs = _parse_wafw00f(stdout)
         else:
             pairs = []
 
@@ -457,6 +626,12 @@ class CollectionPipeline:
             "os-fingerprint": "scan.nmap",
             "exec-tool": "scan.tool",
             "dork-search": "search.engine",
+            "subdomain-enum": "osint.datasource",
+            "email-osint": "osint.datasource",
+            "dir-enum": "scan.web",
+            "tech-fingerprint": "scan.web",
+            "dns-enum": "dns.authoritative",
+            "waf-detect": "scan.web",
         }.get(action, "unknown")
 
 

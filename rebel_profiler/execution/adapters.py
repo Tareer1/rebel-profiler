@@ -16,6 +16,8 @@ Design rules mirrored from broker.Adapter:
 
 from __future__ import annotations
 
+import re
+
 from ..core.errors import UsageError
 from .broker import ActionRequest, Adapter
 
@@ -256,6 +258,158 @@ class DorkSearchAdapter(Adapter):
                                tld=str(tld) if tld is not None else None)
 
 
+class SubdomainEnumAdapter(Adapter):
+    """Passive subdomain discovery via amass (no active probing).
+
+    amass enum -passive -d <domain>: datasources only, zero target-side
+    packets. Output lines are bare hostnames; the pipeline turns each into
+    a hostname claim. The progress spinner goes to stderr, so stdout is
+    clean lines even on a tty.
+    """
+
+    name = "subdomain-enum"
+    binary = "amass"
+    capability_class = "passive_recon"
+    allowed_params = ("timeout",)
+    required_params = ()
+
+    _DOMAIN = r"[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+    _TIMEOUT = r"\d{1,3}"
+
+    def build_argv(self, request: ActionRequest) -> list[str]:
+        domain = _single_token(request.target, field="domain",
+                               pattern=self._DOMAIN)
+        timeout = _single_token(str(request.params.get("timeout", "10")),
+                                field="timeout", pattern=self._TIMEOUT)
+        argv = [self.binary, "enum", "-passive", "-d", domain,
+                "-timeout", timeout]
+        # amass prints its spinner to stderr; under the broker's runner
+        # stderr is captured separately, so nothing extra needed here.
+        return argv
+
+
+class EmailOsintAdapter(Adapter):
+    """Email/host/credential surface via theHarvester (passive sources).
+
+    Runs a bounded passive search and writes JSON to stdout; the pipeline
+    parses emails and hosts into claims.
+    """
+
+    name = "email-osint"
+    binary = "theHarvester"
+    capability_class = "passive_recon"
+    allowed_params = ("limit", "source")
+    required_params = ()
+
+    _DOMAIN = r"[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+    _LIMIT = r"\d{1,4}"
+    _SOURCE = r"[a-z]{2,20}"
+
+    def build_argv(self, request: ActionRequest) -> list[str]:
+        domain = _single_token(request.target, field="domain",
+                               pattern=self._DOMAIN)
+        limit = _single_token(str(request.params.get("limit", "100")),
+                              field="limit", pattern=self._LIMIT)
+        argv = [self.binary, "-d", domain, "-l", limit, "-b", "baidu"]
+        return argv
+
+
+class DirEnumAdapter(Adapter):
+    """Directory/file enumeration via ffuf against the authorized origin.
+
+    Uses the dirb common wordlist, JSON output to stdout, and a strict
+    match list so the run stays small and readable. Active but low-volume.
+    """
+
+    name = "dir-enum"
+    binary = "ffuf"
+    capability_class = "web_assessment"
+    allowed_params = ("wordlist", "extensions")
+    required_params = ()
+
+    _URL = r"https?://[A-Za-z0-9./_-]+"
+    _PATH = r"[A-Za-z0-9._/-]{1,200}"
+    _EXT = r"\.(?:php|asp|aspx|jsp|html|txt|bak|old|zip|sql|json|xml)"
+
+    def build_argv(self, request: ActionRequest) -> list[str]:
+        url = _single_token(request.target, field="url", pattern=self._URL)
+        if not url.endswith("/"):
+            url += "/"        # small.txt by default: polite on slow targets (959 reqs vs 4614 for
+        # common.txt); operators can opt into the bigger list via params.
+        wordlist = str(request.params.get("wordlist", "/usr/share/wordlists/dirb/small.txt"))
+        wordlist = _single_token(wordlist, field="wordlist", pattern=self._PATH)
+        argv = [self.binary, "-u", url + "FUZZ", "-w", wordlist,
+                "-of", "json", "-o", "-",  # JSON to stdout
+                "-mc", "200,204,301,302,307,401,403",
+                "-ac",   # auto-calibrate: filters soft-404 hosts that 200 everything
+                "-t", "15", "-timeout", "6", "-s"]
+        extensions = request.params.get("extensions")
+        if extensions:
+            exts = str(extensions)
+            if not re.fullmatch(r"(?:\.[a-z0-9]{1,5})(?:,\.[a-z0-9]{1,5})*", exts):
+                raise UsageError(f"Invalid extensions '{exts[:40]}…'",
+                                 action="Comma list like .php,.bak")
+            argv += ["-e", exts]
+        return argv
+
+
+class TechFingerprintAdapter(Adapter):
+    """Web technology fingerprinting via whatweb (polite, one pass)."""
+
+    name = "tech-fingerprint"
+    binary = "whatweb"
+    capability_class = "web_assessment"
+    allowed_params = ()
+    required_params = ()
+
+    _URL = r"https?://[A-Za-z0-9./_-]+"
+
+    def build_argv(self, request: ActionRequest) -> list[str]:
+        url = _single_token(request.target, field="url", pattern=self._URL)
+        # no -q: quiet mode suppresses the result line we parse
+        return [self.binary, "--no-errors", "--color=never", url]
+
+
+class DnsEnumAdapter(Adapter):
+    """DNS enumeration via dnsrecon: standard records + zone transfer check
+    + reverse lookups on the target's own range. JSON to stdout."""
+
+    name = "dns-enum"
+    binary = "dnsrecon"
+    capability_class = "passive_recon"
+    allowed_params = ()
+    required_params = ()
+
+    _DOMAIN = r"[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+
+    def build_argv(self, request: ActionRequest) -> list[str]:
+        domain = _single_token(request.target, field="domain",
+                               pattern=self._DOMAIN)
+        # std only: brute (brt) needs a dictionary file and is an *active*
+        # technique — dnsrecon exits rc=1 when no wordlist is given, which
+        # would mark every run failed. Zone brute stays out of the passive
+        # path; the GUI/Hermes can expose a dedicated active action later.
+        return [self.binary, "-d", domain, "-t", "std", "--lifetime", "10",
+                "-n", "1.1.1.1"]
+
+
+class WafDetectAdapter(Adapter):
+    """WAF detection via wafw00f against the authorized origin."""
+
+    name = "waf-detect"
+    binary = "wafw00f"
+    capability_class = "web_assessment"
+    allowed_params = ()
+    required_params = ()
+
+    _URL = r"https?://[A-Za-z0-9./_-]+"
+
+    def build_argv(self, request: ActionRequest) -> list[str]:
+        url = _single_token(request.target, field="url", pattern=self._URL)
+        # positional URL (NOT -H: that flag sets custom request headers)
+        return [self.binary, "-a", "--no-colors", url]
+
+
 class NucleiAdapter(Adapter):
     """Template-driven vulnerability validation (nuclei). High risk."""
 
@@ -293,5 +447,11 @@ EXTENDED_ADAPTERS: tuple[type[Adapter], ...] = (
     TracerouteAdapter,
     PassiveDnsMultiAdapter,
     DorkSearchAdapter,
+    SubdomainEnumAdapter,
+    EmailOsintAdapter,
+    DirEnumAdapter,
+    TechFingerprintAdapter,
+    DnsEnumAdapter,
+    WafDetectAdapter,
     NucleiAdapter,
 )

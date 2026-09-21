@@ -53,7 +53,11 @@ PLAYBOOKS: tuple[Playbook, ...] = (
             PlaybookStep(5, "Dork the search engines", "passive_recon", "dork-search",
                          "Named dorks (files, open dirs, portals, buckets) on "
                          "google/duckduckgo; ahmia over Tor for .onion."),
-            PlaybookStep(6, "Reconcile findings into the case", "info", "",
+            PlaybookStep(6, "Enumerate subdomains passively", "passive_recon", "subdomain-enum",
+                         "amass passive run; add notable hosts to scope."),
+            PlaybookStep(7, "Map the mail surface", "passive_recon", "email-osint",
+                         "theHarvester for @domain addresses (phishing "+ "recon)."),
+            PlaybookStep(8, "Reconcile findings into the case", "info", "",
                          "Register observations with source, time and confidence."),
         ),
     ),

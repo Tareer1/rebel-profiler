@@ -117,6 +117,7 @@ DEFAULT_SOURCES: tuple[Source, ...] = (
     Source("scan.nmap", "scan", "a1", 1.0, "local scan", "protocol answer from the target itself"),
     Source("scan.tool", "scan", "b2", 1.0, "whitelisted tool", "exec-tool run through the broker"),
     Source("search.engine", "osint", "c3", 0.8, "third party index", "engine's view of the target, may be stale or poisoned"),
+    Source("osint.datasource", "osint", "b2", 0.9, "public datasets", "aggregated passive sources (amass, theHarvester)"),
     Source("unknown", "unknown", "e5", 0.5, "", "unattributed content"),
 )
 
