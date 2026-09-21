@@ -187,7 +187,10 @@ def parse_tool_calls(reply: str) -> list[dict]:
 
     When no ``<tool_call>`` block parses, a fenced `````json … ````` object
     with the same ``{"name", "arguments"}`` schema is accepted as a fallback
-    (Qwen-family wrappers). The broker gates every call either way.
+    (Qwen-family wrappers), and failing that, a *bare* JSON object carrying
+    a non-empty string "name" anywhere in the reply (Qwen2.5-Coder drops
+    the wrapper entirely under long prompts). The broker gates every call
+    either way.
     """
     calls: list[dict] = []
     for match in _TOOL_CALL_RE.finditer(reply):
@@ -204,6 +207,9 @@ def parse_tool_calls(reply: str) -> list[dict]:
         arguments = data.get("arguments")
         if not isinstance(arguments, dict):
             arguments = {}
+        # JSON null ⇒ "omitted": an LLM writing {"subject": null} means the
+        # optional param is absent, not a Python None for the broker.
+        arguments = {k: v for k, v in arguments.items() if v is not None}
         calls.append({"name": name, "arguments": arguments})
     if calls:
         return calls
@@ -221,6 +227,49 @@ def parse_tool_calls(reply: str) -> list[dict]:
         arguments = data.get("arguments")
         if not isinstance(arguments, dict):
             arguments = {}
+        # JSON null ⇒ "omitted": an LLM writing {"subject": null} means the
+        # optional param is absent, not a Python None for the broker.
+        arguments = {k: v for k, v in arguments.items() if v is not None}
+        calls.append({"name": name, "arguments": arguments})
+    if calls:
+        return calls
+    return _bare_json_tool_calls(reply)
+
+
+def _bare_json_tool_calls(reply: str) -> list[dict]:
+    """Extract tool calls from bare ``{"name": …}`` JSON in the reply.
+
+    Qwen2.5-Coder occasionally omits both the ``<tool_call>`` wrapper and
+    code fencing under long prompts. Balanced-brace scanning via
+    ``raw_decode`` handles nested ``arguments`` objects; after a successful
+    decode the scan jumps past the whole object so an inner dict (an
+    argument value that happens to carry a "name" key) is never mistaken
+    for a second call.
+    """
+    decoder = json.JSONDecoder()
+    calls: list[dict] = []
+    i = 0
+    while i < len(reply):
+        if reply[i] != "{":
+            i += 1
+            continue
+        try:
+            data, end = decoder.raw_decode(reply, i)
+        except json.JSONDecodeError:
+            i += 1
+            continue
+        i = max(end, i + 1)
+        if not isinstance(data, dict):
+            continue
+        name = str(data.get("name", "")).strip()
+        if not name:
+            continue
+        arguments = data.get("arguments")
+        if not isinstance(arguments, dict):
+            arguments = {}
+        # JSON null ⇒ "omitted": an LLM writing {"subject": null} means the
+        # optional param is absent, not a Python None for the broker.
+        arguments = {k: v for k, v in arguments.items() if v is not None}
         calls.append({"name": name, "arguments": arguments})
     return calls
 

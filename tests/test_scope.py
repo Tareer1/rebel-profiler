@@ -87,3 +87,44 @@ def test_engine_validate_fails_closed(scoped_engine):
 def test_engine_validate_canonicalizes(scoped_engine):
     canonical = scoped_engine.validate("case1", "Host1.Lab.Example.Test.")
     assert canonical == "host1.lab.example.test"
+
+
+def test_host_entry_authorizes_its_urls():
+    # Web actions are spoken in URLs while scope speaks in hosts: an
+    # authorized host must cover its pages (found live on a real target).
+    scope = Scope(case_id="c1", status=ScopeStatus.ACTIVE)
+    scope.add("www.hplovecraft.com")
+    allowed, matched = scope.check("https://www.hplovecraft.com/creation/tomes.aspx")
+    assert allowed and matched == "www.hplovecraft.com"
+
+
+def test_url_matching_is_host_scoped_and_fail_closed():
+    # Scope decides WHO (host); policy decides WHAT (scheme/capability).
+    # A different host stays out even under the same scheme, and a
+    # lookalike suffix can never ride on an authorized name.
+    scope = Scope(case_id="c1", status=ScopeStatus.ACTIVE)
+    scope.add("www.hplovecraft.com")
+    assert scope.check("https://www.hplovecraft.com/tomes")[0]
+    for stranger in ("https://evil.example.com/tomes",
+                     "www.hplovecraft.com.evil.test/",
+                     "https://hplovecraft.com/"):   # apex not authorized here
+        status, _ = scope.decision(stranger)
+        assert status != "in_scope", stranger
+
+
+def test_wildcard_entry_authorizes_url_paths():
+    scope = Scope(case_id="c1", status=ScopeStatus.ACTIVE)
+    scope.add("*.lab.example.test")
+    allowed, _ = scope.check("https://host1.lab.example.test/deep/path?q=1#frag")
+    assert allowed
+
+
+def test_url_pattern_matches_by_host():
+    # A URL-shaped scope entry is compared by its host, so entries pasted
+    # from a browser bar still authorize the site's pages.
+    scope = Scope(case_id="c1", status=ScopeStatus.ACTIVE)
+    scope.add("https://www.hplovecraft.com/creation/tomes.aspx")
+    allowed, _ = scope.check("https://www.hplovecraft.com/creation/tomes.aspx")
+    assert allowed
+    allowed, _ = scope.check("https://www.hplovecraft.com/writing/fiction.aspx")
+    assert allowed

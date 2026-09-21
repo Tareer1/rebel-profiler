@@ -16,6 +16,21 @@ from enum import Enum
 from ..core.errors import ScopeViolationError
 
 
+def _host_of(value: str) -> str | None:
+    """Extract the host from a URL-ish string; ``None`` when it has none.
+
+    Handles scheme, userinfo, port, path/query/fragment and bracketed IPv6
+    literals. Bare ``host/path`` forms (no scheme) yield the host too.
+    """
+    if "://" in value:
+        value = value.split("://", 1)[1]
+    host = value.split("/", 1)[0]
+    host = host.split("?", 1)[0].split("#", 1)[0]
+    host = host.rsplit("@", 1)[-1]
+    host = host.split(":", 1)[0].strip().strip("[]")
+    return host or None
+
+
 class ScopeStatus(str, Enum):
     DRAFT = "draft"
     PENDING_APPROVAL = "pending_approval"
@@ -40,16 +55,35 @@ class ScopeEntry:
 
         Supports exact match, wildcard (``*.example.test``) and ``*.`` suffix
         forms. Comparison is case-insensitive.
+
+        URL candidates are reduced to their host: for web actions operators
+        (and the LLM) naturally speak in URLs while scope speaks in hosts,
+        and authorizing ``www.example.test`` must cover its pages. A URL
+        *pattern* is likewise compared by its host. Reduction applies only
+        to ``://``-bearing strings — bare host-like entries (including
+        port-suffix trick strings used as exclusions) keep their exact
+        literal/fnmatch meaning. The candidate itself never grants anything
+        a host match would not — fail-closed holds.
         """
         candidate = candidate.strip().lower().rstrip(".")
         pattern = self.value.strip().lower().rstrip(".")
-        if candidate == pattern:
-            return True
-        if fnmatch.fnmatch(candidate, pattern):
-            return True
-        # "*.example.test" style pattern also matches "example.test"
-        if pattern.startswith("*.") and candidate == pattern[2:]:
-            return True
+        targets = [candidate]
+        patterns = [pattern]
+        if "://" in candidate:
+            cand_host = _host_of(candidate)
+            if cand_host:
+                targets.append(cand_host)
+        if "://" in pattern:
+            patt_host = _host_of(pattern)
+            if patt_host:
+                patterns.append(patt_host)
+        for target in targets:
+            for pat in patterns:
+                if target == pat or fnmatch.fnmatch(target, pat):
+                    return True
+                # "*.example.test" style pattern also matches "example.test"
+                if pat.startswith("*.") and target == pat[2:]:
+                    return True
         return False
 
 

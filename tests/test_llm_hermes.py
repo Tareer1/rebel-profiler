@@ -176,6 +176,29 @@ class TestParseToolCalls:
             'answer <tool_call>{"name": "x"}</tool_call> tail')
         assert text == "answer  tail"
 
+    def test_bare_json_call_extracted(self):
+        # Qwen2.5-Coder drops the <tool_call> wrapper under long prompts and
+        # answers with a bare JSON object (observed live, v1.4.0 debugging).
+        reply = ('I can help with that.\n\n'
+                 '{"name": "claims_list", "arguments": {"subject": null}}')
+        calls = parse_tool_calls(reply)
+        assert calls == [{"name": "claims_list", "arguments": {}}]
+
+    def test_bare_json_nested_arguments_no_double_count(self):
+        # The nested arguments object also has key/value pairs; balanced
+        # scanning must yield ONE call, not two.
+        reply = ('{"name": "dns-lookup", '
+                 '"arguments": {"target": "h1.test", "record_type": "A"}}')
+        calls = parse_tool_calls(reply)
+        assert calls == [{"name": "dns-lookup",
+                          "arguments": {"target": "h1.test",
+                                        "record_type": "A"}}]
+
+    def test_prose_with_quoted_name_is_not_a_call(self):
+        # Plain prose (even mentioning "name") must never parse as a call —
+        # it needs braces forming a JSON object with a string "name".
+        assert parse_tool_calls('The "name" field is required for tools.') == []
+
 
 # ---------------------------------------------------------------- the loop
 

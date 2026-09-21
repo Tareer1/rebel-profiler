@@ -170,6 +170,7 @@ do_bridge() {
 cmd="${1:-status}"
 case "$cmd" in
   status|-h|--help|help) do_status ;;
+  --version|-V|-v) exec "$RP" --version ;;   # real CLI owns version output
   talk)   shift; [ $# -gt 0 ] && hermes_cmd "$@" || hermes_cmd ;;
   bridge) shift; do_bridge "$@" ;;
   *)      hermes_cmd "$@" ;;   # anything else = a prompt to Hermes
