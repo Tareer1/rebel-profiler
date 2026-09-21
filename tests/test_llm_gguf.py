@@ -369,6 +369,88 @@ class TestPlaneSelection:
         assert "corrupted or incomplete" in plane.fallback_reason
         plane.unload()
 
+    def test_empty_pin_auto_selects_fitting_local_gguf(self, fake_llama,
+                                                      monkeypatch, tmp_path):
+        """Empty pin + a fitting local GGUF + no other engine = that GGUF.
+
+        Regression: `rebel-profiler hermes` with no model pin and no airllm
+        fell back to tiny while a perfectly good local checkpoint sat on
+        disk — the plane volunteered nothing local before reaching for the
+        network.
+        """
+        _isolate_gguf_roots(monkeypatch, tmp_path)
+        (tmp_path / "Local-7B-Instruct-Q4_K_M.gguf").write_bytes(b"\0" * 2048)
+        plane = ModelPlane(limits=DEFAULT_LIMITS["high"])
+        engine = plane.select_engine("")
+        assert plane.engine_kind == "gguf"
+        assert engine.model_id.endswith("Local-7B-Instruct-Q4_K_M.gguf")
+        assert plane.fallback_reason == ""
+        plane.unload()
+
+    def test_empty_pin_names_the_unfitting_checkpoint_in_reason(self,
+                                                               fake_llama,
+                                                               monkeypatch,
+                                                               tmp_path):
+        """A checkpoint that does NOT fit is named in the fallback reason.
+
+        Regression: on the reporting box a 7B Q4 (~8.9GB peak RSS) was told
+        "airllm unavailable" while the real blocker was the tier's 8192MB
+        ceiling. The reason must carry the size class and the tier escape.
+        """
+        _with_fat_gguf(tmp_path, monkeypatch, "Local-7B-Instruct-Q4_K_M.gguf")
+        _stub_airllm(monkeypatch)
+        _isolate_gguf_roots(monkeypatch, tmp_path)
+        plane = ModelPlane(limits=DEFAULT_LIMITS["mid"])
+        engine = plane.select_engine("")
+        assert plane.engine_kind == "tiny"
+        assert "Local-7B-Instruct-Q4_K_M.gguf" in plane.fallback_reason
+        assert "RP_LLM__TIER" in plane.fallback_reason
+        plane.unload()
+
+    def test_empty_pin_never_grabs_a_checkpoint_that_does_not_fit(self,
+                                                                 fake_llama,
+                                                                 monkeypatch,
+                                                                 tmp_path):
+        """Discovery is fit-gated: a too-big GGUF is never volunteered."""
+        _isolate_gguf_roots(monkeypatch, tmp_path)
+        (tmp_path / "Huge-70B-Q4_K_M.gguf").write_bytes(b"\0" * 2048)
+        _stub_airllm(monkeypatch)
+        plane = ModelPlane(limits=DEFAULT_LIMITS["tiny"])
+        engine = plane.select_engine("")
+        assert plane.engine_kind == "tiny"
+        # not selected — and honestly named as the reason nothing local ran
+        assert "Huge-70B" in plane.fallback_reason
+        assert "does not fit tier 'tiny'" in plane.fallback_reason
+        plane.unload()
+
+    def test_explicit_pin_still_beats_auto_discovery(self, fake_llama,
+                                                     monkeypatch, tmp_path):
+        """An explicit --model pin is never swapped for another local file."""
+        _isolate_gguf_roots(monkeypatch, tmp_path)
+        (tmp_path / "Auto-8B-Q4_K_M.gguf").write_bytes(b"\0" * 2048)
+        wanted = tmp_path / "Wanted-3B-Q4_K_M.gguf"
+        wanted.write_bytes(b"\0" * 2048)
+        plane = ModelPlane(limits=DEFAULT_LIMITS["mid"])
+        engine = plane.select_engine(str(wanted))
+        assert plane.engine_kind == "gguf"
+        assert engine.model_id.endswith("Wanted-3B-Q4_K_M.gguf")
+        plane.unload()
+
+    def test_empty_pin_tiny_prefer_never_scans_disk(self, monkeypatch,
+                                                    tmp_path):
+        """prefer_engine='tiny' keeps its old semantics: no discovery."""
+        from rebel_profiler.llm import inference as inference_mod
+
+        def _boom(*_a, **_kw):
+            raise AssertionError("discovery must not run for prefer=tiny")
+
+        monkeypatch.setattr(inference_mod.ModelPlane, "_best_local_model",
+                            _boom)
+        plane = ModelPlane(limits=DEFAULT_LIMITS["mid"], prefer_engine="tiny")
+        engine = plane.select_engine("")
+        assert plane.engine_kind == "tiny"
+        plane.unload()
+
     def test_failed_load_releases_that_engine(self):
         """One engine at a time is the law, failed attempts included."""
 
@@ -408,6 +490,37 @@ class TestPlaneSelection:
 
 
 # ---------------------------------------------------------------- setup
+
+class TestGgufFits:
+    """The public fit verdict used by the engine selector and `llm models`."""
+
+    def test_alias_matches_public_name(self):
+        from rebel_profiler.llm import setup as setup_mod
+
+        assert setup_mod.gguf_fits is setup_mod._gguf_fits
+
+    def test_fits_by_size_compression_and_ram(self, tmp_path):
+        from rebel_profiler.llm.setup import gguf_fits
+
+        p = tmp_path / "Tiny-1B-Q4_K_M.gguf"
+        p.write_bytes(b"\0" * 2048)
+        row = {
+            "path": str(p), "params_b": 1.0, "size_gb": 0.5,
+            "compressed": True, "integrity_ok": None,
+        }
+        assert gguf_fits(row, DEFAULT_LIMITS["tiny"]) is True
+
+    def test_integrity_failure_excludes_even_when_size_fits(self, tmp_path):
+        from rebel_profiler.llm.setup import gguf_fits
+
+        p = tmp_path / "Broken-1B-Q4_K_M.gguf"
+        p.write_bytes(b"\0" * 2048)
+        row = {
+            "path": str(p), "params_b": 1.0, "size_gb": 0.5,
+            "compressed": True, "integrity_ok": False,
+        }
+        assert gguf_fits(row, DEFAULT_LIMITS["tiny"]) is False
+
 
 class TestSetup:
     def test_plan_lists_every_engine_with_install(self):
@@ -611,6 +724,33 @@ class TestGgufIntegrity:
 
 # ---------------------------------------------------------------- helpers
 
+def _stub_airllm(monkeypatch):
+    """Neutralize an installed airllm: selection must never reach network."""
+    fake = types.ModuleType("airllm")
+
+    class _FakeAutoModel:
+        @staticmethod
+        def from_pretrained(*_a, **_kw):
+            raise RuntimeError("stubbed: no downloads in tests")
+
+    fake.AutoModel = _FakeAutoModel
+    monkeypatch.setitem(sys.modules, "airllm", fake)
+
+
+def _isolate_gguf_roots(monkeypatch, tmp_path):
+    """Discovery sees ONLY tmp_path.
+
+    A real repo-local model (``dphn/*.gguf`` on a developer box) must never
+    leak into engine-selection tests: on a big tier it genuinely fits and
+    would win auto-selection over the test fixture.
+    """
+    from rebel_profiler.llm import gguf as gguf_mod
+
+    real = gguf_mod.discover_local_gguf
+    monkeypatch.setattr(gguf_mod, "discover_local_gguf",
+                        lambda **kw: real(roots=[tmp_path]))
+
+
 def _with_fat_gguf(tmp_path, monkeypatch, name):
     """Discover a checkpoint that *reports* 5.5GB without writing 5.5GB.
 
@@ -718,6 +858,68 @@ class TestLlmCli:
         assert rc == 2
         err = json.loads(capsys.readouterr().err)["error"]
         assert "llm local" in err["action"]
+
+    def test_hermes_repl_uses_fitting_local_checkpoint(self, workspace, capsys,
+                                                       monkeypatch, fake_llama,
+                                                       tmp_path):
+        """End-to-end regression for the reported failure.
+
+        `rebel-profiler hermes` on a box with a local 7B Q4 and no airllm:
+        the REPL must open with the gguf engine (not the tiny refusal).
+        """
+        from rebel_profiler.llm import gguf as gguf_mod
+
+        real = gguf_mod.discover_local_gguf
+        monkeypatch.setattr(gguf_mod, "discover_local_gguf",
+                            lambda **kw: real(roots=[tmp_path]))
+        (tmp_path / "Coder-7B-Instruct-Q4_K_M.gguf").write_bytes(b"\0" * 2048)
+        _stub_airllm(monkeypatch)
+        # No RP_LLM__MODEL, no --llm, no config pin: the empty-pin path.
+        monkeypatch.delenv("RP_LLM__MODEL", raising=False)
+        rc = main([*workspace, "hermes", "--oneshot", "-o", "json",
+                   "--max-turns", "2", "hello"])
+        assert rc == 0
+        payload = json.loads(capsys.readouterr().out)["data"]
+        assert payload["engine"] == "gguf"
+        assert payload["model"].endswith(
+            "Coder-7B-Instruct-Q4_K_M.gguf")
+
+    def test_hermes_tier_pin_widens_the_budget(self, workspace, capsys,
+                                               monkeypatch, fake_llama,
+                                               tmp_path):
+        """hermes --tier high carries a checkpoint the auto tier refuses."""
+        from rebel_profiler.llm import gguf as gguf_mod
+
+        real = gguf_mod.discover_local_gguf
+        monkeypatch.setattr(gguf_mod, "discover_local_gguf",
+                            lambda **kw: real(roots=[tmp_path]))
+        _with_fat_gguf(tmp_path, monkeypatch, "Coder-7B-Q4_K_M.gguf")
+        _stub_airllm(monkeypatch)
+        monkeypatch.delenv("RP_LLM__MODEL", raising=False)
+        rc = main([*workspace, "hermes", "--oneshot", "-o", "json",
+                   "--tier", "high", "--max-turns", "2", "hello"])
+        assert rc == 0
+        payload = json.loads(capsys.readouterr().out)["data"]
+        assert payload["engine"] == "gguf"
+        assert payload["model"].endswith("Coder-7B-Q4_K_M.gguf")
+
+    def test_hermes_unfitting_checkpoint_reports_the_tier_escape(
+            self, workspace, capsys, monkeypatch, fake_llama, tmp_path):
+        """Without the tier pin the structured error names the escape."""
+        from rebel_profiler.llm import gguf as gguf_mod
+
+        real = gguf_mod.discover_local_gguf
+        monkeypatch.setattr(gguf_mod, "discover_local_gguf",
+                            lambda **kw: real(roots=[tmp_path]))
+        _with_fat_gguf(tmp_path, monkeypatch, "Coder-7B-Q4_K_M.gguf")
+        _stub_airllm(monkeypatch)
+        monkeypatch.delenv("RP_LLM__MODEL", raising=False)
+        rc = main([*workspace, "hermes", "--oneshot", "-o", "json", "hello"])
+        assert rc == 7   # EXIT_DEPENDENCY
+        err = json.loads(capsys.readouterr().err)["error"]
+        assert "needs real weights" in err["message"]
+        assert "--tier high" in err["action"]
+        assert "Coder-7B-Q4_K_M.gguf" in err["reason"]
 
 
 # ---------------------------------------------------------------- codegen

@@ -162,6 +162,7 @@ rebel-profiler evidence verify <case-id>
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `Dependency unavailable: The airllm package is not installed` | no engine installed | `rebel-profiler llm setup`, install the recommended one (a `tiny` fallback still runs) |
+| `Interactive Hermes needs real weights; only the tiny engine loaded` | no engine installed, or the local checkpoint does not fit the auto tier (the reason names it) | pin a local file (`--llm /path/model.gguf`), widen the budget (`--tier high`), or `rebel-profiler llm setup` to install an engine |
 | `llama-cpp-python` build fails with compiler errors | no C++ toolchain | use the prebuilt wheel index from step 3 |
 | `No GGUF checkpoint on disk for '<model>'` | the file was not found | pass the full path with `--model`, or set `RP_LLM__GGUF_DIRS` |
 | `Model ~8B exceeds tier cap 3B` | tier too small for that model | use a smaller model, or raise the tier explicitly (`--tier mid`) |

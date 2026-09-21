@@ -158,8 +158,8 @@ rebel-profiler doctor
 > env var and exit code on one page. Recurring jobs can pin model/tier/
 > actor settings once with `--config-file job.toml` (precedence: tier
 > defaults < profile < `RP_LLM__*` env < explicit `--tier` flag).
-> Release history: [v1.3.1](RELEASE_NOTES_v1.3.1.md) · [v1.3.0](RELEASE_NOTES_v1.3.0.md)
-> · [v1.2.0](RELEASE_NOTES_v1.2.0.md) · [v1.1.0](RELEASE_NOTES_v1.1.0.md)
+> Release history: [v1.4.0](RELEASE_NOTES_v1.4.0.md) · [v1.3.1](RELEASE_NOTES_v1.3.1.md)
+> · [v1.3.0](RELEASE_NOTES_v1.3.0.md) · [v1.2.0](RELEASE_NOTES_v1.2.0.md) · [v1.1.0](RELEASE_NOTES_v1.1.0.md)
 
 ### AirLLM-mode: heavy LLMs on low-end hardware
 
@@ -545,7 +545,7 @@ machine-specific install commands.
 
 ## Status
 
-Current release: **v1.3.1** — 705 tests passing, CI green. Phases 1–6
+Current release: **v1.4.0** — 769 tests passing, CI green. Phases 1–6
 complete: core foundation, OSINT/recon intelligence, surface &
 fusion, case workflows/RBAC, platform integrations (worker plane, browser
 bridge, Feature Forge, complaint packages) and QA acceptance. See

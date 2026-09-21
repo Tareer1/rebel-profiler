@@ -154,8 +154,20 @@ rebel-profiler llm data <case-id> "question" --pack-only       # data pack, no m
 ```
 
 Local-first rule: without `RP_LLM__ENGINE=external` **nothing leaves the
-machine**. The engine order is always airllm → tiny (honest fallback, reason
-recorded), never a silent substitution.
+machine**. With no model pinned the engine order is **best local checkpoint
+(GGUF → HF cache) → airllm → tiny** (honest fallback, reason recorded), never
+a silent substitution. The auto tier is a hardware fit; a 7B-class Q4 usually
+needs `--tier high`.
+
+```bash
+rebel-profiler hermes --tier high          # widen the budget for a 7B-class Q4
+rebel-profiler hermes --llm /path/model.gguf   # pin one exact checkpoint
+```
+
+CPU reality check: local prefill runs at a few tokens/second on laptop CPUs,
+so hermes' **first turn takes a while** (the tool contract has to be read
+once; later turns reuse the cached prefix). The shell prints a heads-up and
+a per-turn time footer — wait for `hermes is working…` to finish.
 
 ## 4. One-shot collection (each = run + evidence + claims)
 

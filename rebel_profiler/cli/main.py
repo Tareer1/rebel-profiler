@@ -1428,7 +1428,7 @@ def cmd_agent_chat(ctx: AppContext, args: argparse.Namespace) -> int:
     try:
         prefer = os.environ.get("RP_LLM__ENGINE", "").strip().lower()
         plane = ModelPlane(
-            limits=resolve_limits(),
+            limits=resolve_limits(tier=_llm_tier_arg(args)),
             prefer_engine=prefer if prefer in {"tiny", "airllm", "external", "gguf", "native"} else None)
         try:
             if plane.engine is None:
@@ -1454,14 +1454,19 @@ def _hermes_model_pin(ctx, args) -> str:
             or str(_cfg_get(ctx.config, "llm.model", "") or ""))
 
 
-def _hermes_repl_plane():
+def _llm_tier_arg(args) -> str | None:
+    """Explicit --tier pin on an LLM-backed command (None = auto-fit)."""
+    return getattr(args, "tier", None)
+
+
+def _hermes_repl_plane(args) -> "ModelPlane":
     """Resolve the ModelPlane for the interactive Hermes REPL."""
     from ..llm.budget import resolve_limits
     from ..llm.inference import ModelPlane
 
     prefer = os.environ.get("RP_LLM__ENGINE", "").strip().lower()
     return ModelPlane(
-        limits=resolve_limits(),
+        limits=resolve_limits(tier=_llm_tier_arg(args)),
         prefer_engine=prefer if prefer in {"tiny", "airllm", "external", "gguf", "native"} else None)
 
 
@@ -1487,7 +1492,7 @@ def _hermes_repl(ctx: AppContext, case_rec: dict, args: argparse.Namespace,
             args.goal_seed = seed
         except AttributeError:
             pass
-    return run_repl(ctx, case_rec, args, plane or _hermes_repl_plane())
+    return run_repl(ctx, case_rec, args, plane or _hermes_repl_plane(args))
 
 
 def _resolve_session_case(ctx: AppContext, want: str = "") -> dict:
@@ -1536,7 +1541,7 @@ def cmd_hermes(ctx: AppContext, args: argparse.Namespace, plane=None) -> int:
     db = ctx.open_case(case_rec["id"])
     prefer = os.environ.get("RP_LLM__ENGINE", "").strip().lower()
     plane = plane or ModelPlane(
-        limits=resolve_limits(),
+        limits=resolve_limits(tier=_llm_tier_arg(args)),
         prefer_engine=prefer if prefer in {"tiny", "airllm", "external", "gguf", "native"} else None)
     try:
         if plane.engine is None:
@@ -2891,6 +2896,8 @@ def build_parser() -> argparse.ArgumentParser:
                          help="bounded agentic turns per message (default 8)")
     p_achat.add_argument("--llm", default="", metavar="MODEL",
                          help="pin the model (default: config profile / engine default)")
+    p_achat.add_argument("--tier", default=None, choices=list(_llm_tiers()),
+                         help="budget tier for the LLM plane (default: hardware-fit)")
     p_awrk = agent_subs.add_parser("work", parents=[sub_common], help="self-repair session: work list → error log → revise → asks you")
     p_awrk.add_argument("case_id")
     p_awrk.add_argument("goal")
@@ -2912,6 +2919,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help="bounded agentic turns per message (default 8)")
     p_her.add_argument("--llm", "--model", dest="llm", default="", metavar="MODEL",
                        help="pin the model (default: config profile / engine default)")
+    p_her.add_argument("--tier", default=None, choices=list(_llm_tiers()),
+                       help="budget tier for the LLM plane (default: hardware-fit)")
     p_her.add_argument("--case", default="",
                        help="case id (default: newest ACTIVE case, else newest, "
                             "else a fresh one is created)")

@@ -454,6 +454,16 @@ class TestAgentChatRepl:
         assert rc == 0
         assert "dns-lookup" in out
 
+    def test_repl_bare_exit_is_not_a_goal(self, env, monkeypatch, capsys):
+        # "exit" without a slash must quit, not become an LLM goal: feeding
+        # it to the agent loop burned a multi-minute CPU turn on the word.
+        rc, out = self._run_repl(
+            monkeypatch, capsys, replies=[],
+            lines=["exit"], env_fixture=env)
+        assert rc == 0
+        assert "hermes is working" not in out
+        assert "hermes>" not in out
+
     def test_repl_tiny_engine_refuses(self, env, monkeypatch, capsys):
         from types import SimpleNamespace
 

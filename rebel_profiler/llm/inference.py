@@ -388,10 +388,13 @@ class ModelPlane:
         return engine
 
     def select_engine(self, model: str, **options):
-        """Choose airllm when loadable and allowed; tiny otherwise.
+        """Choose the best loadable engine; tiny only as the honest last resort.
 
-        Selection is deterministic given the environment: airllm importable,
-        tier rules satisfied, not force-pinned to tiny. Every fallback
+        Selection is deterministic given the environment: importable engines,
+        tier rules satisfied, not force-pinned. An empty model pin is a
+        request for "the best engine this machine can actually carry", so the
+        plane volunteers the best-fitting LOCAL checkpoint (GGUF first, then
+        an HF-cache snapshot) before reaching for the network. Every fallback
         records *why* (``fallback_reason``) — no silent substitution.
         """
         if self._prefer == "tiny":
@@ -432,10 +435,25 @@ class ModelPlane:
             self._fallback_reason = "; ".join(reasons)
             return engine
 
+        if not str(model or "").strip():
+            # Empty pin: volunteer a LOCAL checkpoint the current tier can
+            # actually carry before considering anything that would need the
+            # network. GGUF first (single file, already quantized), then an
+            # HF-cache snapshot for the native engine.
+            best, note = self._best_local_model()
+            if best is not None:
+                model = best
+            else:
+                reasons.append(
+                    note or ("no local checkpoint fits tier "
+                             f"'{self.limits.tier}' "
+                             f"(RP_LLM__TIER to widen; --model to pin a "
+                             f"specific file)"))
         try:
-            # Local GGUF first when the request names a checkpoint that is
-            # already on disk: one file, already quantized, no download and no
-            # layer split. Falls through to the HF-dir engines otherwise.
+            # Local GGUF right after discovery: an empty pin can now name a
+            # checkpoint that is already on disk — one file, already
+            # quantized, no download and no layer split. Falls through to the
+            # HF-dir engines otherwise.
             from .gguf import resolve_local_gguf
 
             if resolve_local_gguf(model) is not None:
@@ -476,6 +494,57 @@ class ModelPlane:
             self._engine = engine
             self._engine_kind = "tiny"
             return engine
+
+    # -- local discovery -------------------------------------------------------
+
+    def _best_local_model(self) -> tuple[str | None, str]:
+        """The best-fitting LOCAL checkpoint for the current tier, or None.
+
+        Returns ``(model, note)``. The model is the checkpoint to volunteer
+        (only ever when the operator gave NO pin — an explicit pin must never
+        be silently swapped for whatever else is on disk); the note explains
+        what sits on disk when nothing fits, so the fallback reason names the
+        real blocker instead of a generic "airllm unavailable". GGUF
+        checkpoints are ranked by fit first, then parameter count (the most
+        capable checkpoint that fits wins); an HF-cache snapshot is the last
+        local resort. Discovery is guarded so a broken scanner can never
+        abort selection — the plane simply reports that nothing local fits.
+        """
+        try:
+            from .gguf import discover_local_gguf
+            from .setup import gguf_fits
+
+            rows = discover_local_gguf()
+            candidates = [row for row in rows if gguf_fits(row, self.limits)]
+            if candidates:
+                best = max(candidates,
+                           key=lambda r: (r.get("params_b") or 0.0,
+                                          r.get("size_gb") or 0.0))
+                return best["path"], ""
+            if rows:
+                # Nothing fits: name the biggest on-disk checkpoint and the
+                # tier escape, so "tiny engine only" is immediately actionable.
+                big = max(rows, key=lambda r: (r.get("params_b") or 0.0))
+                return None, (
+                    f"{Path(big['path']).name} "
+                    f"(~{big.get('params_b', '?')}B, {big.get('size_gb', '?')}GB "
+                    f"on disk) does not fit tier '{self.limits.tier}' "
+                    f"(RP_LLM__TIER to widen; --model to pin a specific file)")
+        except Exception:
+            pass
+        try:
+            from .catalog import model_params_b
+            from .native import discover_local_models
+
+            local = discover_local_models()
+            fit = [row for row in local
+                   if model_params_b(row["model"]) <= self.limits.max_model_b]
+            if fit:
+                best = max(fit, key=lambda r: model_params_b(r["model"]))
+                return best["model"], ""
+        except Exception:
+            pass
+        return None, ""
 
     def _engine_for(self, kind: str, model: str, **options):
         if kind == "tiny":

@@ -272,6 +272,14 @@ def default_gguf_roots() -> list[Path]:
     roots.append(cwd)
     for rel in ("models", "gguf", "weights", "dphn"):
         roots.append(cwd / rel)
+    # The project's own tree, checked from the package location up: a model
+    # library checked out next to the source (a repo-local ``dphn/``) must be
+    # discoverable even when the CLI is invoked from a different cwd.
+    for base in (Path(__file__).resolve().parent,):
+        for _ in range(3):
+            base = base.parent
+            for rel in ("models", "gguf", "weights", "dphn"):
+                roots.append(base / rel)
     home = Path.home()
     for rel in (".cache/llama.cpp", "models", ".lmstudio/models", ".ollama/models"):
         roots.append(home / rel)
@@ -396,6 +404,33 @@ def resolve_local_gguf(model: str | Path, *, roots: list[str | Path] | None = No
 # the engine
 
 
+def _physical_cpu_count() -> int | None:
+    """Physical (not SMT) core count — the thread count llama.cpp wants.
+
+    Counts unique (physical id, core id) pairs from /proc/cpuinfo, which is
+    the honest core count on hyper-threaded x86; falls back to the logical
+    count when the platform does not expose the split.
+    """
+    try:
+        cores: set[tuple[str, str]] = set()
+        phys: str | None = None
+        with open("/proc/cpuinfo") as fh:
+            for line in fh:
+                field, _, value = line.strip().partition(":")
+                if field.strip() == "physical id":
+                    phys = value.strip()
+                elif field.strip() == "core id" and phys is not None:
+                    cores.add((phys, value.strip()))
+        if cores:
+            return len(cores)
+    except Exception:
+        pass
+    try:
+        return os.cpu_count()
+    except Exception:
+        return None
+
+
 def _require_llama_cpp():
     try:
         import llama_cpp  # noqa: PLC0415 — heavy import, only when needed
@@ -482,7 +517,13 @@ class GgufEngine:
         kwargs: dict = {
             "model_path": str(self.path),
             "n_ctx": int(self.limits.max_context_tokens),
-            "n_threads": int(self._n_threads or os.cpu_count() or 4),
+            # Physical cores, not logical: llama.cpp saturating both SMT
+            # siblings of a core contends for the same FP units and makes
+            # prompt prefill *slower* than fewer, well-fed threads. Hyper-
+            # threaded CPUs report 2× here; half of it is the honest count.
+            "n_threads": int(self._n_threads
+                            or _physical_cpu_count() or 4),
+            "n_batch": 512,
             "verbose": False,
         }
         gpu_layers = self._gpu_layers()
@@ -531,16 +572,36 @@ class GgufEngine:
             return []
 
     def _fit_input(self, prompt: str) -> tuple[str, bool]:
-        """Truncate the prompt to the tier's context ceiling (bounded input)."""
+        """Truncate the prompt to the tier's context ceiling (bounded input).
+
+        Long agent sessions must not lose the *current* turn: front-only
+        truncation severed the newest user message right when the context
+        filled up, so the model answered a question it never saw. Keep the
+        head (system rules) and the tail (the live exchange) instead.
+        """
         ids = self._tokenize(prompt)
         if not ids or len(ids) <= self.limits.max_context_tokens:
             return prompt, False
         keep = max(1, self.limits.max_context_tokens - 8)
+        head = int(keep * 0.6)
+        tail = max(1, keep - head)
         try:
-            fitted = self._llm.detokenize(ids[:keep]).decode("utf-8", "replace")
+            fitted = b"\n".join((
+                self._llm.detokenize(ids[:head]),
+                b"...[older turns trimmed to fit the context window]...",
+                self._llm.detokenize(ids[-tail:]),
+            )).decode("utf-8", "replace")
         except Exception:
             fitted = prompt[: keep * 4]
         return fitted, True
+
+    # ChatML/Llama-3 end-of-turn markers. Without these llama.cpp keeps
+    # sampling past the turn boundary — a tool-calling agent then gets a
+    # rambling 1024-token reply (and pays for every token) instead of a
+    # bounded one. Harmless for plain-completion use: the markers only fire
+    # if the model actually emits them.
+    STOP_SEQUENCES = ("<|im_end|>", "<|im_start|>", "<|eot_id|>",
+                      "<|end_header_id|>", "<|end_of_text|>")
 
     def generate(self, prompt: str, *, max_new_tokens: int | None = None,
                  temperature: float = 0.2) -> GenerationResult:
@@ -560,6 +621,7 @@ class GgufEngine:
                 temperature=max(0.0, float(temperature)),
                 top_p=0.95,
                 repeat_penalty=1.05,
+                stop=list(self.STOP_SEQUENCES),
                 echo=False,
             )
             choice = (out.get("choices") or [{}])[0]

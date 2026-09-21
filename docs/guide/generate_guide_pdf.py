@@ -41,7 +41,7 @@ class GuidePDF(FPDF):
     def header(self):
         self.set_font("Helvetica", "B", 9)
         self.set_text_color(100,100,100)
-        self.cell(0, 5, "Rebel Profiler  v1.3.1  —  Hermes-Style Interface Guide", align="R")
+        self.cell(0, 5, "Rebel Profiler  v1.4.0  —  Hermes-Style Interface Guide", align="R")
         self.ln(2)
         self.set_draw_color(50,50,50)
         self.line(self.l_margin, self.get_y(), self.w - self.r_margin, self.get_y())
@@ -141,7 +141,7 @@ pdf.set_text_color(60,60,60)
 pdf.multi_cell(0, 5.5,
     "Kali Linux Cybersecurity Intelligence &\n"
     "Authorized Security Operations Framework\n\n"
-    "Version 1.3.1  |  705 tests passing  |  MIT License\n"
+    "Version 1.4.0  |  769 tests passing  |  MIT License\n"
     "Made by REBEL")
 pdf.ln(5)
 
@@ -216,7 +216,7 @@ pdf.sub_title("Who built it and under what license")
 pdf.bullet("Author: REBEL")
 pdf.bullet("License: MIT — see LICENSE in the project root")
 pdf.bullet("Python: >= 3.11, stdlib-only core — no third-party runtime dependencies")
-pdf.bullet("Tests: pytest (dev-only); 705 passing as of v1.3.1")
+pdf.bullet("Tests: pytest (dev-only); 769 passing as of v1.4.0")
 pdf.bullet("CI: GitHub Actions workflow at .github/workflows/ci.yml")
 pdf.ln(2)
 
@@ -1106,7 +1106,7 @@ pdf.code(
     "  CHEATSHEET.md            Every daily-use command on one page\n"
     "  README.md                Overview, quickstart, full feature list, AirLLM-mode, engines\n"
     "  ROADMAP.md               Shipped checklist + future phases\n"
-    "  RELEASE_NOTES_v1.x.x.md  Release history (v1.1.0 -> v1.3.1)\n"
+    "  RELEASE_NOTES_v1.x.x.md  Release history (v1.1.0 -> v1.4.0)\n"
     "  LICENSE                  MIT\n"
     "  pyproject.toml           Build config: name, version, optional deps, CLI entry point\n"
     "  .git/                    Git history\n"
@@ -1403,11 +1403,11 @@ pdf.code(
     "1. README.md            — what the tool is, full feature list, quickstart, AirLLM-mode, engines\n"
     "2. ARCHITECTURE.md      — seven planes, request lifecycle, trust boundaries, data model\n"
     "3. CHEATSHEET.md        — every command in daily-use order, one page\n"
-    "4. pyproject.toml       — version (1.3.1), CLI entry point (rebel_profiler.cli.main:main),\n"
+    "4. pyproject.toml       — version (1.4.0), CLI entry point (rebel_profiler.cli.main:main),\n"
     "                          optional deps (gguf / native / airllm / airllm-compression)\n"
     "5. rebel_profiler/__init__.py  — APP_NAME, APP_DESCRIPTION, __version__\n"
     "6. docs/SETUP.md        — one-time setup end-to-end on a fresh machine\n"
-    "7. RELEASE_NOTES_v1.3.1.md  — what changed in the current release"
+    "7. RELEASE_NOTES_v1.4.0.md  — what changed in the current release"
 )
 pdf.ln(2)
 
@@ -1523,7 +1523,7 @@ pdf.ln(3)
 pdf.set_font("Helvetica","I",9)
 pdf.set_text_color(100,100,100)
 pdf.multi_cell(0, 4.8,
-    "End of guide. Version 1.3.1. MIT License. Made by REBEL.\n"
+    "End of guide. Version 1.4.0. MIT License. Made by REBEL.\n"
     "Use only on systems you are explicitly authorized to assess."
 )
 

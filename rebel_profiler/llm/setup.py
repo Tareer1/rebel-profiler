@@ -48,7 +48,7 @@ def gguf_rss_need_mb(size_gb: float) -> int:
     return int(size_gb * 1024 * GGUF_RSS_MULTIPLIER)
 
 
-def _gguf_fits(row: dict, limits: Limits) -> bool:
+def gguf_fits(row: dict, limits: Limits) -> bool:
     """Fit verdict for one GGUF row: size class, compression AND resident RAM.
 
     The RAM check is what keeps the verdict honest: without it an 8B Q4 model
@@ -65,6 +65,10 @@ def _gguf_fits(row: dict, limits: Limits) -> bool:
     if not _fits(row["params_b"], row["compressed"], limits):
         return False
     return gguf_rss_need_mb(row.get("size_gb", 0.0)) <= limits.max_rss_mb
+
+
+# Back-compat alias: the engine selector consumes the same verdict.
+_gguf_fits = gguf_fits
 
 
 def smallest_fitting_tier(row: dict) -> str | None:
@@ -98,7 +102,7 @@ def local_models(*, limits: Limits, roots: list[str | Path] | None = None) -> di
 
         for row in discover_local_gguf(roots=roots):
             row = dict(row)
-            row["fits"] = _gguf_fits(row, limits)
+            row["fits"] = gguf_fits(row, limits)
             row["needs_tier"] = smallest_fitting_tier(row)
             row["run"] = gguf_run_command(row)
             gguf.append(row)

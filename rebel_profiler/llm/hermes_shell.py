@@ -209,6 +209,7 @@ class ShellSession:
         self.plane = plane
         self.args = args
         self.turns = 0          # agent loops run this session
+        self.llm_turns = 0      # LLM replies served (drives the first-turn note)
         self.started = time.time()
 
 
@@ -348,8 +349,9 @@ def run_repl(ctx, case_rec: dict, args, plane) -> int:
                 reason=plane.fallback_reason,
                 action="Install an engine (pip install 'rebel-profiler[gguf]' or "
                        "'rebel-profiler[airllm]'), pull a model ('llm setup', "
-                       "'llm local'), or use 'agent run --plan' for the "
-                       "deterministic path.",
+                       "'llm local'), pin one already on disk (--llm "
+                       "/path/to/model.gguf), widen the budget (--tier high), "
+                       "or use 'agent run --plan' for the deterministic path.",
             )
 
         def _banner_case() -> dict:
@@ -383,6 +385,12 @@ def run_repl(ctx, case_rec: dict, args, plane) -> int:
                 continue
             name, rest = REGISTRY_OBJ.resolve(line)
             if name is None:                       # plain language → agent loop
+                # A bare "exit" is a goodbye, not a goal for the LLM: without
+                # this guard the model burns a multi-minute CPU turn guessing
+                # what the operator meant by it.
+                if line.strip().lower() in {"exit", "quit", "q", ":q", ":q!",
+                                            "bye", "goodbye"}:
+                    break
                 s.turns += 1
                 _run_agent_turn(ctx, s, line)
                 continue
@@ -407,13 +415,20 @@ def run_repl(ctx, case_rec: dict, args, plane) -> int:
 def _run_agent_turn(ctx, s: ShellSession, line: str) -> None:
     from .hermes import HermesAgentLoop
 
-    print(_dim("  hermes is working…"))
+    if not s.llm_turns:
+        # The first turn pays the full system-prompt prefill: minutes on a
+        # laptop CPU. Saying so turns a "frozen" wait into a known cost.
+        print(_dim("  hermes is working… (first turn reads the whole "
+                   "tool contract — this can take a few minutes on CPU)"))
+    else:
+        print(_dim("  hermes is working…"))
     loop = HermesAgentLoop(
         s.case_rec["id"], line, plane=s.plane,
         broker=s.ctx.broker(s.db), evidence=s.ctx.evidence_store(s.db, s.case_rec["id"]),
         db=s.db, max_turns=getattr(s.args, "max_turns", 8), ctx=s.ctx,
     )
     report = loop.run()
+    s.llm_turns += 1
     for call in report["calls"]:
         state = "✓" if not call.get("error") else "✗"
         target = (call.get("target", "") or call.get("added", "")
@@ -422,6 +437,10 @@ def _run_agent_turn(ctx, s: ShellSession, line: str) -> None:
               f"{call.get('action', '')} {target}")
     answer = report.get("final_answer") or "(no answer — turn budget hit)"
     print(f"{_accent('hermes>')} {answer}")
+    elapsed = report.get("elapsed_s")
+    turns = report.get("turns_used")
+    if elapsed is not None and turns is not None:
+        print(_dim(f"  ({turns} turn(s), {float(elapsed):.0f}s)"))
 
 
 def _model_pin(ctx, args) -> str:
