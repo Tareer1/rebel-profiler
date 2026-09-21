@@ -426,6 +426,68 @@ def _parse_wafw00f(stdout: str) -> list[tuple[str, str]]:
     return pairs
 
 
+def _parse_js_intel(stdout: str) -> list[tuple[str, str]]:
+    """js-intel: run the jsintel extractor over one fetched JS document."""
+    from .jsintel import extract
+
+    report = extract(stdout)
+    pairs: list[tuple[str, str]] = []
+    for item in report["endpoints"]:
+        pairs.append(("js_endpoint", item["value"]))
+    for item in report["secrets"]:
+        pairs.append((f"js_secret:{item['kind']}", item["value"]))
+    for item in report["hosts"]:
+        pairs.append(("js_cloud_host", item["value"]))
+    return pairs[:120]
+
+
+_WAYBACK_URL_RE = re.compile(r"https?://\S{4,300}")
+
+
+def _parse_wayback(stdout: str, subject: str) -> list[tuple[str, str]]:
+    """wayback-urls: CDX 'original' column lines; keep in-scope hosts only.
+
+    The archive returns URLs for any host whose capture matched the CDX
+    query — including out-of-scope CDNs the target once referenced. Claims
+    are only emitted for URLs on the queried subject, so the ledger never
+    silently grows claims about hosts the case never authorized.
+    """
+    from urllib.parse import urlparse
+
+    host_suffix = "." + subject.lower().lstrip(".")
+    pairs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for line in stdout.splitlines():
+        url = line.strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        try:
+            host = (urlparse(url).hostname or "").lower()
+        except ValueError:
+            continue
+        if host == subject.lower() or host.endswith(host_suffix):
+            pairs.append(("wayback_url", url[:300]))
+        if len(pairs) >= 150:
+            break
+    return pairs
+
+
+def _parse_probe(stdout: str) -> list[tuple[str, str]]:
+    """probe: parse the response head — status line + selected headers."""
+    pairs: list[tuple[str, str]] = []
+    m = re.search(r"HTTP/[0-9.]+\s+(\d{3})(?:[^\r\n]*)?", stdout)
+    if m:
+        pairs.append(("probe_status", m.group(1)))
+    for name in ("server", "content-type", "content-length", "location",
+                 "www-authenticate", "x-powered-by"):
+        hm = re.search(rf"^{re.escape(name)}:\s*(.{{1,200}})\s*$",
+                       stdout, re.I | re.M)
+        if hm:
+            pairs.append(("probe_header", f"{name}: {hm.group(1).strip()}"))
+    return pairs
+
+
 def _parse_ct_json(stdout: str, *, limit: int = 50) -> list[tuple[str, str]]:
     """Parse crt.sh JSON output into (kind, value) pairs.
 
@@ -587,6 +649,12 @@ class CollectionPipeline:
             pairs = _parse_dnsrecon(stdout + "\n" + stderr)
         elif effective_action == "waf-detect":
             pairs = _parse_wafw00f(stdout)
+        elif effective_action == "js-intel":
+            pairs = _parse_js_intel(stdout)
+        elif effective_action == "wayback-urls":
+            pairs = _parse_wayback(stdout, subject)
+        elif effective_action == "probe":
+            pairs = _parse_probe(stdout)
         else:
             pairs = []
 
@@ -653,6 +721,9 @@ class CollectionPipeline:
             "tech-fingerprint": "scan.web",
             "dns-enum": "dns.authoritative",
             "waf-detect": "scan.web",
+            "js-intel": "js.static",
+            "wayback-urls": "archive.wayback",
+            "probe": "scan.web",
         }.get(action, "unknown")
 
 

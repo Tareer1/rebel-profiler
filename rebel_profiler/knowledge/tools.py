@@ -73,6 +73,19 @@ _GROUPS: tuple[ToolGroup, ...] = (
             Tool("subdomain-enum", "amass", "passive_recon", (),
                  "Passive subdomain discovery from public datasets.",
                  ("footprinting", "enumeration")),
+            Tool("js-intel", "curl", "passive_recon", (),
+                 "Fetch one JS asset and extract embedded API paths, "
+                 "absolute URLs, key/secret candidates and cloud-host "
+                 "references (S3, Firebase, Supabase...).",
+                 ("enumeration", "web")),
+            Tool("wayback-urls", "curl", "passive_recon", (),
+                 "Historical URL surface from the Wayback CDX index "
+                 "(archive-side lookup; the target is never touched).",
+                 ("footprinting", "enumeration")),
+            Tool("probe", "curl", "vuln_validation", (),
+                 "Single manual verification request (method/path/payload "
+                 "chosen by the operator); approval-gated, evidence-captured.",
+                 ("web", "exploitation")),
             Tool("email-osint", "theHarvester", "passive_recon", (),
                  "Email and host surface from passive search sources.",
                  ("footprinting",)),

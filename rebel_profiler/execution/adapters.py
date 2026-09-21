@@ -36,6 +36,10 @@ def _single_token(value: object, *, field: str, pattern: str) -> str:
     return text
 
 
+_BROWSER_UA = ("Mozilla/5.0 (X11; Linux x86_64; rv:128.0) "
+               "Gecko/20100101 Firefox/128.0")
+
+
 class WhoisAdapter(Adapter):
     """Domain registration intelligence (whois). Passive."""
 
@@ -437,6 +441,126 @@ class NucleiAdapter(Adapter):
         return argv
 
 
+class JsIntelAdapter(Adapter):
+    """Fetch ONE JS asset and extract endpoints/secrets/cloud hosts.
+
+    The fetch is a single curl GET — the same class of request a browser
+    already makes. Extraction is offline (jsintel); no probing, no fuzzing.
+    """
+
+    name = "js-intel"
+    binary = "curl"
+    capability_class = "passive_recon"
+    allowed_params = ("max_bytes",)
+    required_params = ()
+
+    _URL = r"https?://[A-Za-z0-9._~:/?#@!$&()*+,;=%\[\]-]{4,300}"
+    _BYTES = r"\d{1,7}"
+
+    def build_argv(self, request: ActionRequest) -> list[str]:
+        url = _single_token(request.target, field="url", pattern=self._URL)
+        argv = [self.binary, "-fsS", "-L", "--max-time", "45",
+                "-A", "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) "
+                      "Gecko/20100101 Firefox/128.0", url]
+        max_bytes = request.params.get("max_bytes")
+        if max_bytes is not None:
+            max_bytes = _single_token(max_bytes, field="max_bytes",
+                                      pattern=self._BYTES)
+            if not (1000 <= int(max_bytes) <= 5_000_000):
+                raise UsageError(f"max_bytes out of range: {max_bytes}")
+            argv += ["--max-filesize", max_bytes]
+        return argv
+
+
+class WaybackUrlsAdapter(Adapter):
+    """Historical URLs for the target from the Wayback CDX API (read-only).
+
+    Pure third-party archive lookup: the request goes to web.archive.org,
+    never to the target. Surfaces forgotten endpoints, parameters and old
+    app versions — classic bug-bounty recon, zero target impact.
+    """
+
+    name = "wayback-urls"
+    binary = "curl"
+    capability_class = "passive_recon"
+    allowed_params = ("limit", "filter_mime")
+    required_params = ()
+
+    _DOMAIN = r"[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+    _LIMIT = r"\d{1,6}"
+    _MIME = r"[a-z/+]{1,40}"
+
+    def build_argv(self, request: ActionRequest) -> list[str]:
+        domain = _single_token(request.target, field="domain",
+                               pattern=self._DOMAIN)
+        limit = request.params.get("limit")
+        limit = _single_token(limit, field="limit", pattern=self._LIMIT) \
+            if limit is not None else "5000"
+        if not (1 <= int(limit) <= 50000):
+            raise UsageError(f"limit out of range: {limit}")
+        match_all = f"{domain}/*"
+        query = ("?url=" + match_all.replace("*", "%2A")
+                 + "&output=text&fl=original&collapse=urlkey"
+                 + f"&limit={limit}")
+        # ONE url argument: curl treats each extra arg as another URL and
+        # tries to fetch "&output=text…" as a host (curl (3) Bad hostname).
+        argv = [self.binary, "-fsS", "--max-time", "60", "-A", _BROWSER_UA,
+                "https://web.archive.org/cdx/search/cdx" + query]
+        mime = request.params.get("filter_mime")
+        if mime is not None:
+            mime = _single_token(mime, field="filter_mime", pattern=self._MIME)
+            argv[-1] += "&filter=mimetype:" + mime
+        return argv
+
+
+class ProbeAdapter(Adapter):
+    """Single-request manual verification probe (curl) — HIGH RISK by policy.
+
+    One hand-specified request to a hand-specified URL, captured as
+    evidence. This is the operator's PoC instrument: capability class
+    ``vuln_validation`` maps to a *high* risk level, which the policy
+    engine turns into an approval-queue decision. Nothing here is ever
+    automated: every probe names an exact method, path and payload the
+    operator chose.
+    """
+
+    name = "probe"
+    binary = "curl"
+    capability_class = "vuln_validation"
+    allowed_params = ("method", "data", "header", "timeout")
+    required_params = ()
+
+    _URL = r"https?://[A-Za-z0-9._~:/?#@!$&()*+,;=%\[\]-]{4,300}"
+    _METHOD = r"(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)"
+    # data may carry &, =, % (form/json payloads) but no shell metachars;
+    # curl is invoked without a shell so this is defense-in-depth.
+    _TOKEN = r"[A-Za-z0-9._@:/+=&%?~-]{1,400}"
+    _HEADER = r"[A-Za-z0-9-]{1,60}:\s?[ -~]{1,300}"
+    _TIMEOUT = r"\d{1,3}"
+
+    def build_argv(self, request: ActionRequest) -> list[str]:
+        url = _single_token(request.target, field="url", pattern=self._URL)
+        method = request.params.get("method", "GET")
+        method = _single_token(method, field="method", pattern=self._METHOD)
+        argv = [self.binary, "-sS", "-i", "--max-time", "30",
+                "-X", method, "-A", "rebel-profiler probe", url]
+        data = request.params.get("data")
+        if data is not None:
+            data = _single_token(data, field="data", pattern=self._TOKEN)
+            argv += ["--data-raw", data]
+        header = request.params.get("header")
+        if header is not None:
+            header = _single_token(header, field="header", pattern=self._HEADER)
+            argv += ["-H", header]
+        timeout = request.params.get("timeout")
+        if timeout is not None:
+            timeout = _single_token(timeout, field="timeout", pattern=self._TIMEOUT)
+            if not (1 <= int(timeout) <= 120):
+                raise UsageError(f"timeout out of range: {timeout}")
+            argv[argv.index("--max-time") + 1] = timeout
+        return argv
+
+
 EXTENDED_ADAPTERS: tuple[type[Adapter], ...] = (
     WhoisAdapter,
     CertTransparencyAdapter,
@@ -454,4 +578,7 @@ EXTENDED_ADAPTERS: tuple[type[Adapter], ...] = (
     DnsEnumAdapter,
     WafDetectAdapter,
     NucleiAdapter,
+    JsIntelAdapter,
+    WaybackUrlsAdapter,
+    ProbeAdapter,
 )

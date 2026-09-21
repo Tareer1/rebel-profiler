@@ -55,9 +55,12 @@ PLAYBOOKS: tuple[Playbook, ...] = (
                          "google/duckduckgo; ahmia over Tor for .onion."),
             PlaybookStep(6, "Enumerate subdomains passively", "passive_recon", "subdomain-enum",
                          "amass passive run; add notable hosts to scope."),
-            PlaybookStep(7, "Map the mail surface", "passive_recon", "email-osint",
+            PlaybookStep(7, "Mine historical URLs", "passive_recon", "wayback-urls",
+                         "Wayback CDX for forgotten endpoints/params on the "
+                         "subject; archive-side, zero target impact."),
+            PlaybookStep(8, "Map the mail surface", "passive_recon", "email-osint",
                          "theHarvester for @domain addresses (phishing "+ "recon)."),
-            PlaybookStep(8, "Reconcile findings into the case", "info", "",
+            PlaybookStep(9, "Reconcile findings into the case", "info", "",
                          "Register observations with source, time and confidence."),
         ),
     ),
@@ -99,8 +102,14 @@ PLAYBOOKS: tuple[Playbook, ...] = (
                          "HSTS, CSP, cookie flags, cache-control."),
             PlaybookStep(4, "Endpoint surface discovery", "web_assessment", "web-crawl",
                          "Authorized crawling within path boundaries."),
-            PlaybookStep(5, "Report configuration findings", "info", "",
-                         "Weak suites and missing headers become findings with evidence."),
+            PlaybookStep(5, "Mine shipped JavaScript", "passive_recon", "js-intel",
+                         "Pull the site's JS bundles and extract API routes, "
+                         "cloud hosts and key/secret candidates."),
+            PlaybookStep(6, "Verify notable candidates manually", "vuln_validation", "probe",
+                         "Single approval-gated requests against the exact "
+                         "endpoints the JS/wayback mining surfaced."),
+            PlaybookStep(7, "Report configuration findings", "info", "",
+                         "Weak suites, missing headers and exposed routes become findings with evidence."),
         ),
     ),
     Playbook(
