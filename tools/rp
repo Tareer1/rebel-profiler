@@ -140,29 +140,63 @@ EOF
 do_bridge() {
   if bridge_up; then
     echo "$(grn '✓') bridge already live: 127.0.0.1:8765"
-    return 0
-  fi
+  else
   local CASE; CASE=$(newest_case || true)
   if [ -z "$CASE" ]; then
     CASE=$("$RP" case create "rp workspace" "created by rp bridge" -o json \
            | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["data"]["id"])' 2>/dev/null) || {
       echo "$(red '✗') case create fail"; exit 1; }
   fi
-  [ -f "$TOKEN_FILE" ] || python3 -c 'import secrets; print("rp-"+secrets.token_hex(16))' > "$TOKEN_FILE"
+  [ -f "$TOKEN_FILE" ] || "$PY" -c 'import secrets; print("rp-"+secrets.token_hex(16))' > "$TOKEN_FILE"
   ( cd "$REPO" && setsid nohup env RP_BROWSER_TOKEN="$(cat "$TOKEN_FILE")" \
-      "$PY" -m rebel_profiler.cli.main browser serve "$CASE" \
+      "$RP" browser serve "$CASE" \
       > "$BRIDGE_LOG" 2>&1 < /dev/null & )
   for i in $(seq 1 10); do
     sleep 1
     bridge_up && break
   done
-  if bridge_up; then
-    echo "$(grn '✓') bridge live: 127.0.0.1:8765  (token: $TOKEN_FILE)"
-    echo "  extension popup mein wahi token paste karo"
-  else
+  if ! bridge_up; then
     echo "$(red '✗') bridge start nahi hua — log: $BRIDGE_LOG"
     exit 7
   fi
+  echo "$(grn '✓') bridge live: 127.0.0.1:8765"
+  fi
+  echo "  token (copy → extension popup): $(bold "$(cat "$TOKEN_FILE" 2>/dev/null)")"
+  echo
+  echo "$(bold 'Firefox setup (qadam ba qadam):')"
+  echo "  1. Firefox kholo → address bar mein: $(bold 'about:debugging#/runtime/this-firefox')"
+  echo "  2. $(bold 'Load Temporary Add-on…') dabao"
+  echo "  3. File chuno: $(bold "$REPO/extension/manifest.json")"
+  echo "  4. Toolbar mein Rebel icon → token paste → $(bold 'Save') → $(bold 'Check bridge')"
+  echo "  5. $(bold 'Grant site access') dabao (ek dafa) → $(bold 'Run now')"
+  echo "  Phir job do:  $(bold "rp grab https://in-scope-url/")  — ya hermes se bolo."
+  echo "  Monitor:      $(bold 'tail -f $BRIDGE_LOG')"
+}
+
+do_grab() {
+  # rp grab <url> [extractors] — submit a browser-extract job + tell the
+  # operator exactly what will happen (the extension does the rest).
+  local url="${1:-}"; [ -n "$url" ] || { echo "usage: rp grab <url> [extractors]"; exit 2; }
+  shift
+  local extract="${1:-title,links,text}"
+  local CASE; CASE=$(newest_case || true)
+  [ -n "$CASE" ] || { echo "$(red '✗') koi case nahi — pehle case banao"; exit 1; }
+  do_bridge >/dev/null 2>&1 || true
+  bridge_up || { echo "$(red '✗') bridge live nahi — 'rp bridge' chalao"; exit 7; }
+  local out job
+  out=$("$RP" browser submit "$CASE" "$url" --extract "$extract" -o json 2>&1) || {
+    echo "$out"; exit 1; }
+  job=$(printf '%s' "$out" | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["data"]["job_id"])' 2>/dev/null)
+  echo "$(grn '✓') job $(bold "$job") queued → $url"
+  echo "  extension (Firefox mein loaded) ~10s mein uthayega, tab khol kar padhega,"
+  echo "  result wapas bridge ko dega — evidence + claims khud ban jayenge."
+  echo "  Result: $(bold "rp job $job")   Monitor: $(bold "tail -f $BRIDGE_LOG")"
+}
+
+do_job() {
+  local job="${1:-}"
+  [ -n "$job" ] || { echo "usage: rp job <job-id>"; exit 2; }
+  exec "$RP" browser result "$job"
 }
 
 # ----------------------------------------------------------------- main ---
@@ -173,5 +207,7 @@ case "$cmd" in
   --version|-V|-v) exec "$RP" --version ;;   # real CLI owns version output
   talk)   shift; [ $# -gt 0 ] && hermes_cmd "$@" || hermes_cmd ;;
   bridge) shift; do_bridge "$@" ;;
+  grab)   shift; do_grab "$@" ;;
+  job)    shift; do_job "$@" ;;
   *)      hermes_cmd "$@" ;;   # anything else = a prompt to Hermes
 esac

@@ -224,6 +224,31 @@ def _parse_whois(stdout: str) -> list[tuple[str, str]]:
     return pairs
 
 
+def _parse_dork_hits(stdout: str, *, engine: str, dork: str
+                     ) -> list[tuple[str, str]]:
+    """Parse one search-engine result page into (kind, value) pairs.
+
+    Each hit contributes a ``search_hit`` claim whose value is the hit URL,
+    plus, for on-domain hits, a ``hostname`` pair (the engine surfaced a
+    host on the audited domain). Engine markup is untrusted: every URL is
+    scheme-checked and bounded before it becomes a claim value.
+    """
+    from urllib.parse import urlparse
+
+    from .dorks import parse_dork_stdout
+
+    pairs: list[tuple[str, str]] = []
+    for hit in parse_dork_stdout(engine, stdout):
+        url = hit.get("url", "")
+        if not url:
+            continue
+        pairs.append(("search_hit", f"[{dork}] {url}"))
+        host = (urlparse(url).hostname or "").lower()
+        if host:
+            pairs.append(("hostname", host))
+    return pairs
+
+
 def _parse_ct_json(stdout: str, *, limit: int = 50) -> list[tuple[str, str]]:
     """Parse crt.sh JSON output into (kind, value) pairs.
 
@@ -368,6 +393,10 @@ class CollectionPipeline:
             pairs = _parse_dns_answer(stdout, rtype)
         elif effective_action == "whois-lookup":
             pairs = _parse_whois(stdout)
+        elif effective_action == "dork-search":
+            pairs = _parse_dork_hits(stdout,
+                                     engine=str(effective_params.get("engine", "google")),
+                                     dork=str(effective_params.get("dork", "")))
         else:
             pairs = []
 
@@ -427,6 +456,7 @@ class CollectionPipeline:
             "service-detect": "scan.nmap",
             "os-fingerprint": "scan.nmap",
             "exec-tool": "scan.tool",
+            "dork-search": "search.engine",
         }.get(action, "unknown")
 
 

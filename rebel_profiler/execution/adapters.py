@@ -230,6 +230,32 @@ class PassiveDnsMultiAdapter(Adapter):
         return [self.binary, "+short", "-t", rtype, target]
 
 
+class DorkSearchAdapter(Adapter):
+    """Search-engine dorking (Google / DuckDuckGo / Ahmia-over-Tor).
+
+    The query is a NAMED template from intel.dorks plus the validated
+    domain target — free-form strings never reach argv. Result page is
+    parsed defensively by the collection pipeline (engine markup is
+    untrusted data).
+    """
+
+    name = "dork-search"
+    binary = "curl"
+    capability_class = "passive_recon"
+    allowed_params = ("engine", "dork", "tld")
+    required_params = ("engine", "dork")
+
+    def build_argv(self, request: ActionRequest) -> list[str]:
+        from ..intel.dorks import build_dork_argv
+
+        engine = str(request.params.get("engine", ""))
+        dork = str(request.params.get("dork", ""))
+        tld = request.params.get("tld")
+        return build_dork_argv(engine=engine, dork=dork,
+                               target=request.target,
+                               tld=str(tld) if tld is not None else None)
+
+
 class NucleiAdapter(Adapter):
     """Template-driven vulnerability validation (nuclei). High risk."""
 
@@ -266,5 +292,6 @@ EXTENDED_ADAPTERS: tuple[type[Adapter], ...] = (
     SmbEnumAdapter,
     TracerouteAdapter,
     PassiveDnsMultiAdapter,
+    DorkSearchAdapter,
     NucleiAdapter,
 )

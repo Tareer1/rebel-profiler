@@ -235,7 +235,18 @@ rebel-profiler browser submit <case-id> https://in.scope/ --extract title,links,
 rebel-profiler browser submit <case-id> <url> --actions '[{"op":"click","selector":"#id"}]' --approved
 rebel-profiler browser result <job-id>
 
-# Or just: rp bridge (start it) / rp grab <url> (submit + wait + show)
+# Or just: rp bridge (start + Firefox setup steps printed) / rp grab <url>
+# (submit a browser-extract job) / rp job <id> (read the result)
+
+# Dorking (named templates only; results become search_hit + hostname claims)
+rebel-profiler intel collect <case-id> dork-search example.test \
+    -p engine google      -p dork site-files -y
+rebel-profiler intel collect <case-id> dork-search example.test \
+    -p engine duckduckgo  -p dork login-portals -y
+rebel-profiler intel collect <case-id> dork-search example \
+    -p engine ahmia -p dork open-directories -p tld onion -y   # via torsocks
+# Dorks: site-files, open-directories, config-files, backup-files,
+#        login-portals, staging-sites, cloud-buckets, exposed-emails, tech-stack
 ```
 
 ## 8. Self-extension & privileged jobs

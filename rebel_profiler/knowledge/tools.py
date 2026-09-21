@@ -65,6 +65,11 @@ _GROUPS: tuple[ToolGroup, ...] = (
             Tool("cert-transparency", "certctl", "passive_recon", (),
                  "Certificate transparency log review for subdomain visibility.",
                  ("footprinting",)),
+            Tool("dork-search", "curl", "passive_recon", (),
+                 "Search-engine dorking: named dork templates (files, "
+                 "directories, portals, buckets) over Google, DuckDuckGo "
+                 "and Ahmia-over-Tor (.onion).",
+                 ("footprinting", "enumeration")),
         ),
     ),
     ToolGroup(

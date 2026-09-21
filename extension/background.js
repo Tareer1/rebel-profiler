@@ -59,21 +59,42 @@ async function refreshScope() {
   }
 }
 
-/** Scope check mirrors security/scope.py: exclusions win, then includes. */
-function inScope(url) {
-  let host;
-  try {
-    host = new URL(url).hostname.toLowerCase().replace(/\.$/, "");
-  } catch {
-    return false;
+/** Scope check mirrors security/scope.py: exclusions win, then includes.
+ *
+ * Both sides reduce ://-bearing strings to their host (v1.4.0 scope fix),
+ * so an authorized host covers its URLs in either direction. Onion hosts
+ * are matched literally. Nothing else about the URL grants scope.
+ */
+function hostOf(value) {
+  let s = String(value).toLowerCase().replace(/\.$/, "");
+  if (s.includes("://")) {
+    try {
+      return new URL(s).hostname.toLowerCase();
+    } catch {
+      return null;
+    }
   }
+  s = s.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0];
+  s = s.split("@", 1).pop().split(":", 1)[0].replace(/^\[|\]$/g, "");
+  return s || null;
+}
+
+function inScope(url) {
+  const host = hostOf(url);
+  if (!host) return false;
+  const hits = (pattern) => {
+    const pat = String(pattern).toLowerCase().replace(/\.$/, "");
+    if (matchPattern(pat, host)) return true;
+    const patHost = hostOf(pat);
+    return patHost ? matchPattern(patHost, host) : false;
+  };
   for (const p of scopePatterns) {
     if (!p.excluded) continue;
-    if (matchPattern(p.value, host)) return false;
+    if (hits(p.value)) return false;
   }
   for (const p of scopePatterns) {
     if (p.excluded) continue;
-    if (matchPattern(p.value, host)) return true;
+    if (hits(p.value)) return true;
   }
   return false;
 }

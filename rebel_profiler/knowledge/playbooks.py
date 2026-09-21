@@ -50,7 +50,10 @@ PLAYBOOKS: tuple[Playbook, ...] = (
                          "A/AAAA/MX/NS/TXT/CAA per domain; note anomalies."),
             PlaybookStep(4, "Review certificate transparency", "passive_recon", "cert-transparency",
                          "Subdomain and certificate visibility from CT logs."),
-            PlaybookStep(5, "Reconcile findings into the case", "info", "",
+            PlaybookStep(5, "Dork the search engines", "passive_recon", "dork-search",
+                         "Named dorks (files, open dirs, portals, buckets) on "
+                         "google/duckduckgo; ahmia over Tor for .onion."),
+            PlaybookStep(6, "Reconcile findings into the case", "info", "",
                          "Register observations with source, time and confidence."),
         ),
     ),
