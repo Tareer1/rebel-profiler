@@ -191,15 +191,18 @@ class ApiGateway:
             return 200, {"ok": True}
         if path == "/state":
             claims = self._db.claims_for(self.case_id)
+            head = self._db.conn.execute(
+                "SELECT hash FROM audit_events WHERE case_id = ?"
+                " ORDER BY seq DESC LIMIT 1", (self.case_id,)).fetchone()
             return 200, {
                 "case_id": self.case_id,
                 "claims": len(claims),
                 "evidence": len(self._db.conn.execute(
                     "SELECT 1 FROM evidence_records WHERE case_id = ?",
                     (self.case_id,)).fetchall()),
-                "audit_head": self._db.conn.execute(
-                    "SELECT hash FROM audit_events WHERE case_id = ?"
-                    " ORDER BY seq DESC LIMIT 1", (self.case_id,)).fetchone(),
+                # Serialize the row NOW: json.dumps(default=str) would emit
+                # "<sqlite3.Row object at …>" — useless to any API consumer.
+                "audit_head": head["hash"] if head is not None else None,
             }
         if path == "/events":
             return 200, {"events": list_events(self._db, self.case_id, limit=50)}

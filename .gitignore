@@ -27,8 +27,10 @@ models/
 # Local guide/PDF drafts — workbench material, not part of the repo.
 docs/guide/drafts/
 
-# Generated artifacts
+# Generated artifacts (the frontend handoff brief is an exception: it is
+# meant to travel as a single file, so the generated PDF is versioned too)
 *.pdf
+!docs/FRONTEND_BRIEF.pdf
 
 # Job profiles may hold machine-specific model paths (hermes.example.toml is
 # the committed template; copy it to hermes.toml and edit for your machine).
