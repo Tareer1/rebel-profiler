@@ -52,7 +52,7 @@ DEFAULT_LIMITS = {
     "low": Limits(max_rss_mb=4096, max_context_tokens=2048, max_new_tokens=256,
                   max_model_b=8.0, allow_gpu=True, require_compression=True,
                   tier="low"),
-    "mid": Limits(max_rss_mb=8192, max_context_tokens=4096, max_new_tokens=512,
+    "mid": Limits(max_rss_mb=10240, max_context_tokens=4096, max_new_tokens=512,
                   max_model_b=70.0, allow_gpu=True, require_compression=False,
                   tier="mid"),
     "high": Limits(max_rss_mb=16384, max_context_tokens=8192, max_new_tokens=1024,

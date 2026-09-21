@@ -841,6 +841,7 @@ class TestLlmCli:
         # A big file (≈5.5GB → ≈11GB peak RSS) is right-sized for the high
         # tier, not the default mid tier — the error must say so. The size is
         # faked via stat (nothing multi-GB is written; tmpfs is small).
+        _isolate_gguf_roots(monkeypatch, tmp_path)
         monkeypatch.setenv("RP_LLM__GGUF_DIRS", str(tmp_path))
         _mid, _high = _with_fat_gguf(tmp_path, monkeypatch, "Big-8B-Q4_K_S.gguf")
         rc = main([*workspace, "llm", "generate", "hi", "--local", "-o", "json"])

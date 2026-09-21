@@ -302,28 +302,49 @@ def _parse_harvester(stdout: str, subject: str) -> list[tuple[str, str]]:
 
 
 def _parse_ffuf(stdout: str) -> list[tuple[str, str]]:
-    """ffuf JSON (-of json -o -): results[] with input.FUZZ + status + url."""
+    """ffuf output: JSON results[] (input.FUZZ + status + url), or the bare
+    word-per-line stream printed by ``-s``.
+
+    Real-world note: some ffuf builds (2.1.0-dev) suppress ``-o -`` JSON in
+    silent mode, so the word stream is the fallback contract, not noise.
+    """
     pairs: list[tuple[str, str]] = []
     # The runner may interleave ANSI progress frames; the JSON object is the
     # payload — find the last one that parses.
     start = stdout.find('{"commandline"')
-    if start < 0:
-        return pairs
-    try:
-        data = json.loads(stdout[start:])
-    except json.JSONDecodeError:
-        return pairs
-    for row in (data.get("results") or [])[:100]:
-        if not isinstance(row, dict):
-            continue
-        fuzz = str((row.get("input") or {}).get("FUZZ", "")).strip()
-        status = row.get("status")
-        url = str(row.get("url", ""))
-        if not fuzz and not url:
-            continue
-        value = f"/{fuzz} [{status}]" if fuzz else f"{url} [{status}]"
-        pairs.append(("web_path", value))
-    return pairs
+    if start >= 0:
+        try:
+            data = json.loads(stdout[start:])
+            for row in (data.get("results") or [])[:100]:
+                if not isinstance(row, dict):
+                    continue
+                fuzz = str((row.get("input") or {}).get("FUZZ", "")).strip()
+                status = row.get("status")
+                url = str(row.get("url", ""))
+                if not fuzz and not url:
+                    continue
+                value = f"/{fuzz} [{status}]" if fuzz else f"{url} [{status}]"
+                pairs.append(("web_path", value))
+            return pairs
+        except json.JSONDecodeError:
+            pass
+    # Fallback: the interactive progress stream. Builds without working
+    # ``-o -`` print ``<word>  [Status: NNN, Size: ...]`` lines (ANSI-padded)
+    # on stdout; ``-s`` prints bare words. Parse both.
+    clean = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", stdout)
+    for match in re.finditer(r"\b(\S{1,60}?)\s+\[Status:\s*(\d{3})", clean):
+        word, status = match.group(1).strip().rstrip("/"), match.group(2)
+        if re.fullmatch(r"[A-Za-z0-9._@-]{1,60}", word):
+            pairs.append(("web_path", f"/{word} [{status}]"))
+    if not pairs:
+        for line in clean.splitlines():
+            word = line.strip().rstrip("/").lstrip("/")
+            if not word or " " in word or "[" in word or "{" in word:
+                continue
+            if not re.fullmatch(r"[A-Za-z0-9._@-]{1,60}", word):
+                continue
+            pairs.append(("web_path", f"/{word} [discovered]"))
+    return pairs[:100]
 
 
 def _parse_whatweb(stdout: str) -> list[tuple[str, str]]:

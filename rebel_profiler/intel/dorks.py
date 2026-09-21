@@ -57,12 +57,12 @@ DORK_TEMPLATES: dict[str, DorkTemplate] = {
             "open-directories", 'intitle:"index.of" site:{}', "directory",
             "Open directory listings on the target domain"),
         DorkTemplate(
-            "config-files", 'site:{} (ext:conf OR ext:cnf OR ext:cfg OR '
-            'ext:env OR ext:ini)', "config",
+            "config-files", 'site:{} (filetype:conf OR filetype:cnf OR '
+            'filetype:cfg OR filetype:env OR filetype:ini)', "config",
             "Possible configuration files indexed for the domain"),
         DorkTemplate(
-            "backup-files", 'site:{} (ext:bak OR ext:old OR ext:swp OR '
-            'ext:sql OR ext:dump)', "backup",
+            "backup-files", 'site:{} (filetype:bak OR filetype:old OR '
+            'filetype:swp OR filetype:sql OR filetype:dump)', "backup",
             "Possible backup/dump files indexed for the domain"),
         # --- portals and auth surfaces --------------------------------------
         DorkTemplate(
@@ -106,9 +106,12 @@ class DorkProvider:
             return ["curl", "-fsS", "--max-time", "30",
                     "-A", _UA, f"https://www.google.com/search?q={q}&num=20&hl=en"]
         if self.key == "duckduckgo":
-            # The JSON instant-answer API: stable, no scraping ambiguity.
-            return ["curl", "-fsS", "--max-time", "30",
-                    "-A", _UA, f"https://api.duckduckgo.com/?q={q}&format=json&no_html=1"]
+            # html.duckduckgo.com (POST form): the instant-answer JSON API
+            # returns zero hits for operator queries, and the plain GET on
+            # /html/ is bot-challenged aggressively; the POST endpoint with
+            # a browser UA is the stable polite surface (202 + SERP).
+            return ["curl", "-fsS", "--max-time", "30", "--data", f"q={q}",
+                    "-A", _UA, "https://html.duckduckgo.com/html/"]
         if self.key == "ahmia":
             # Ahmia indexes .onion services; reachable only via Tor.
             return ["torsocks", "curl", "-fsS", "--max-time", "60",
@@ -233,7 +236,9 @@ def parse_dork_stdout(engine: str, stdout: str) -> list[dict]:
     parses to zero hits.
     """
     if engine == "duckduckgo":
-        return _parse_ddg_json(stdout)
+        # The html endpoint replaced the instant-answer JSON API; fall back
+        # to JSON parsing so old evidence blobs still re-parse.
+        return _parse_ddg_html(stdout) or _parse_ddg_json(stdout)
     if engine == "ahmia":
         return _parse_ahmia(stdout)
     return _parse_google(stdout)
@@ -262,6 +267,46 @@ def _parse_google(stdout: str) -> list[dict]:
         if hit:
             hits.append(hit)
     return hits[:30]
+
+
+_DDG_RESULT_RE = re.compile(
+    r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>', re.S)
+_DDG_URL_RE = re.compile(r'<a[^>]+class="result__url"[^>]*>\s*([^<\s]+)', re.I)
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _parse_ddg_html(stdout: str) -> list[dict]:
+    """Parse html.duckduckgo.com SERP: result__a (title+href) or the plain
+    result__url line beneath it. URLs may arrive as //duckduckgo.com/l/?uddg=
+    <encoded> redirects — unwrap them defensively."""
+    hits: list[dict] = []
+    seen: set[str] = set()
+
+    def add(url: str, title: str) -> None:
+        url = _unwrap_ddg_url(url)
+        if not url or url in seen:
+            return
+        seen.add(url)
+        hit = _hit(url, title, "duckduckgo")
+        if hit:
+            hits.append(hit)
+
+    for match in _DDG_RESULT_RE.finditer(stdout):
+        add(match.group(1), _TAG_RE.sub("", match.group(2)).strip())
+    if not hits:
+        for match in _DDG_URL_RE.finditer(stdout):
+            add(match.group(1), "")
+    return hits[:30]
+
+
+def _unwrap_ddg_url(url: str) -> str:
+    if "//duckduckgo.com/l/" in url or "//duckduckgo.com/l/?" in url:
+        m = re.search(r"uddg=([^&]+)", url)
+        if m:
+            from urllib.parse import unquote
+            return unquote(m.group(1))
+        return ""
+    return url
 
 
 def _parse_ddg_json(stdout: str) -> list[dict]:

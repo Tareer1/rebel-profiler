@@ -342,7 +342,7 @@ class DirEnumAdapter(Adapter):
                 "-of", "json", "-o", "-",  # JSON to stdout
                 "-mc", "200,204,301,302,307,401,403",
                 "-ac",   # auto-calibrate: filters soft-404 hosts that 200 everything
-                "-t", "15", "-timeout", "6", "-s"]
+                "-t", "15", "-timeout", "6"]
         extensions = request.params.get("extensions")
         if extensions:
             exts = str(extensions)

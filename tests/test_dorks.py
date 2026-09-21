@@ -35,7 +35,7 @@ class TestDorkArgv:
                                target="example.test")
         assert argv[0] == "curl"
         assert "--max-time" in argv
-        assert any("api.duckduckgo.com" in a for a in argv)
+        assert any("html.duckduckgo.com" in a for a in argv)
         assert any("index.of" in a for a in argv)          # dork operators present
         assert any("site%3Aexample.test" in a for a in argv)
 
