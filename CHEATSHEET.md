@@ -177,6 +177,15 @@ rebel-profiler intel collect <case-id> whois-lookup target.com
 rebel-profiler intel collect <case-id> cert-transparency target.com
 rebel-profiler intel collect <case-id> port-scan h1.target.com -p ports 22,80,443
 rebel-profiler intel crawl <case-id> https://h1.target.com/ --max-pages 20
+rebel-profiler intel hunt <case-id> https://h1.target.com/   # AUTONOMOUS JS HUNT:
+#   harvests <script src> + inline JS from the seed page (scope-checked per URL),
+#   mines API routes / keys / S3-Firebase-Supabase hosts via jsintel, folds in
+#   Wayback history, ranks P1(secrets) > P2(endpoints/cloud) > P3(history),
+#   and prints a ready-to-run probe suggestion per item. Coffee optional.
+rebel-profiler intel collect <case-id> js-intel https://h1.target.com/app.js
+rebel-profiler intel collect <case-id> wayback-urls h1.target.com -p limit 500
+rebel-profiler intel collect <case-id> probe https://h1.target.com/api/user/1 -p method GET
+#   ^ probe = the PoC instrument (vuln_validation → approval queue, evidence-chained)
 rebel-profiler run <case-id> <action> <target> -p key value --dry-run  # preview
 rebel-profiler intel claims <case-id> [subject]
 rebel-profiler intel sources [source-key]

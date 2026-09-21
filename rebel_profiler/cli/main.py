@@ -459,6 +459,8 @@ def cmd_intel(ctx: AppContext, args: argparse.Namespace) -> int:
         return cmd_intel_collect(ctx, args)
     if args.intel_command == "crawl":
         return _cmd_intel_crawl(ctx, args)
+    if args.intel_command == "hunt":
+        return _cmd_intel_hunt(ctx, args)
     if args.intel_command == "fusion":
         return _cmd_intel_fusion(ctx, args)
     if args.intel_command == "sources":
@@ -646,6 +648,46 @@ def cmd_agent(ctx: AppContext, args: argparse.Namespace) -> int:
         human.append(session["report_human"])
         emit({"human": "\n".join(human), "data": session}, args.output)
         return EXIT_SUCCESS if ok else 1
+    finally:
+        db.close()
+
+
+def _cmd_intel_hunt(ctx: AppContext, args: argparse.Namespace) -> int:
+    """Autonomous JS hunt: harvest scripts, mine, rank, one triage queue."""
+    from ..evidence.store import EvidenceStore
+    from ..intel.hunt import JsHunter
+
+    rec = ctx.find_case(args.case_id)
+    if rec["status"] != "active":
+        raise UsageError(
+            f"Case {rec['id']} is '{rec['status']}', not active",
+            reason="The hunter only runs inside an ACTIVE case.",
+            action=f"rebel-profiler case activate {rec['id']}")
+    db = ctx.open_case(rec["id"])
+    try:
+        hunter = JsHunter(
+            rec["id"], scope_engine=ctx.scope_engine(),
+            evidence=EvidenceStore(db, blobs_dir=ctx.case_dir(rec["id"]) / "blobs"),
+            max_scripts=max(1, min(args.max_scripts, 50)),
+        )
+        report = hunter.hunt(args.url, include_wayback=not args.no_wayback)
+        stats = report["stats"]
+        lines = [
+            f"js hunt on {report['seed']} — "
+            f"{stats.get('scripts_mined', 0)} script(s) mined, "
+            f"{stats.get('p1', 0)} P1 / {stats.get('p2', 0)} P2 / "
+            f"{stats.get('p3', 0)} P3 item(s)",
+            f"  evidence : {report.get('evidence_id')}",
+        ]
+        for item in report["items"][:20]:
+            lines.append(
+                f"  [P{item['priority']}][{item['category']}] "
+                f"{item['value'][:80]}")
+            lines.append(f"        ↳ {item['suggestion'][:90]}")
+        if not report["items"]:
+            lines.append("  (no items — the page ships no exploitable surface)")
+        emit({"human": "\n".join(lines), "data": report}, args.output)
+        return EXIT_SUCCESS if report["items"] else EXIT_SUCCESS
     finally:
         db.close()
 
@@ -2664,6 +2706,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_ifuse = intel_subs.add_parser("fusion", parents=[sub_common], help="cross-domain fusion report: subject profiles + conflicts (PDF 9)")
     p_ifuse.add_argument("case_id")
     p_ifuse.add_argument("subject", nargs="?", default="", help="one subject's fused profile")
+    p_ihunt = intel_subs.add_parser("hunt", parents=[sub_common], help="autonomous JS surface hunt: harvest scripts from a page, mine endpoints/keys/cloud hosts, rank a triage queue")
+    p_ihunt.add_argument("case_id")
+    p_ihunt.add_argument("url", help="seed page (must be in scope)")
+    p_ihunt.add_argument("--max-scripts", type=int, default=25)
+    p_ihunt.add_argument("--no-wayback", action="store_true",
+                         help="skip Wayback history fold-in")
 
     # evidence
     p_ev = subs.add_parser("evidence", parents=[sub_common], help="evidence ledger operations")
