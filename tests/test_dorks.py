@@ -45,11 +45,21 @@ class TestDorkArgv:
         assert argv[0] == "curl" and "torsocks" not in argv
         assert any("google.com/search" in a for a in argv)
 
-    def test_ahmia_routes_through_torsocks(self):
+    def test_ahmia_routes_through_torsocks(self, monkeypatch):
+        # torsocks presence is environment-dependent (CI has none): pin the
+        # check so the argv contract is tested everywhere.
+        monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/" + name
+                            if name == "torsocks" else None)
         argv = build_dork_argv(engine="ahmia", dork="open-directories",
                                target="example", tld="onion")
         assert argv[0] == "torsocks" and argv[1] == "curl"
         assert any("ahmia.fi" in a for a in argv)
+
+    def test_ahmia_without_torsocks_is_honest(self, monkeypatch):
+        monkeypatch.setattr("shutil.which", lambda name: None)
+        with pytest.raises(DependencyUnavailableError):
+            build_dork_argv(engine="ahmia", dork="open-directories",
+                            target="example", tld="onion")
 
     def test_unknown_engine_and_dork_rejected(self):
         with pytest.raises(UsageError):
