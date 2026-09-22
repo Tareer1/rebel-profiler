@@ -76,6 +76,38 @@ LOOP_RULES = (
 )
 
 
+# How many recent user/assistant exchanges stay in the prompt: enough for
+# continuity, few enough that CPU prefill stays sane.
+CONVERSATION_HISTORY_TURNS = 6
+
+
+def _case_context(case_id: str, db) -> str:
+    """Dense case CONTEXT block so chat references like 'the active case'
+    are grounded without the model burning a turn on case_search.
+
+    Failure-tolerant: a broken db read degrades to the id only — the
+    workflow tools re-check status themselves anyway.
+    """
+    lines = [f"CONTEXT: current case id = {case_id}"]
+    try:
+        row = db.get_case(case_id)
+        if row is not None:
+            lines[0] = (f"CONTEXT: current case = {case_id} "
+                        f"[{row['status']}] — {row.get('name', '')}")
+            entries = [dict(e) for e in db.scope_entries(case_id)]
+            scope_vals = ", ".join(
+                str(e.get("value", "")) for e in entries[:12]) or "(none)"
+            lines.append(
+                f"Authorized scope: {scope_vals}. Claims in ledger: "
+                f"{len(db.claims_for(case_id, None))}.")
+            lines.append(
+                "Hunting workflow: hunt_run (seed URL) → hunt_triage → "
+                "probe_suggest (approval-gated). Prefer passive tools first.")
+    except Exception:
+        pass
+    return "\n".join(lines)
+
+
 def tool_schema(registry) -> list[dict]:
     """Render the live adapter registry as Hermes-style tool schemas.
 
@@ -385,9 +417,13 @@ class HermesAgentLoop:
     def __init__(self, case_id: str, goal: str, *, plane: ModelPlane,
                  broker, evidence, db, ledger=None,
                  max_turns: int = 8, max_new_tokens: int | None = None,
-                 registry=None, ctx=None) -> None:
+                 registry=None, ctx=None,
+                 history: list[dict] | None = None) -> None:
         self.case_id = case_id
         self.goal = redact(str(goal))[:GOAL_MAX_CHARS]
+        # REPL continuity: the caller owns one conversation list per shell
+        # session; every turn reads the tail and appends its exchange back.
+        self.history = list(history) if history else []
         self.plane = plane
         self.broker = broker
         self.registry = registry or broker.adapters
@@ -472,19 +508,42 @@ class HermesAgentLoop:
     # -- the loop ----------------------------------------------------------------
 
     def run(self) -> dict:
-        """Run the bounded loop; returns the operator-facing report."""
+        """Run the bounded loop; returns the operator-facing report.
+
+        The conversation is continuous: ``history`` (prior exchanges from
+        this REPL session) precedes this goal, and after the run this
+        turn's exchange is appended back onto the same list so the next
+        turn remembers what was already done. A dense CONTEXT block names
+        the active case, its scope and claim count — "keep working the
+        active case" becomes actionable without re-stating anything.
+        """
         from .inference import TinyLlmEngine as _Tiny  # cheap guard import
 
         engine_selected = False
         messages: list[dict] = [
             {"role": "system", "content": self._tools_prompt()},
-            {"role": "user",
-             "content":
-                 f"GOAL: {self.goal}\n\nWork toward the goal one tool call "
-                 "at a time. If no tool call is needed to answer — greetings, "
-                 "questions about yourself, opinions — just reply in plain "
-                 "prose; never call a tool for show."},
+            {"role": "user", "content": _case_context(self.case_id, self.db)},
+            {"role": "assistant", "content":
+                "Understood — I will work this case inside its authorized "
+                "scope, one tool call at a time."},
         ]
+        messages.extend(
+            {"role": m.get("role", "user"),
+             "content": redact(str(m.get("content", "")))[:FINAL_MAX_CHARS]}
+            for m in self.history[-2 * CONVERSATION_HISTORY_TURNS:])
+        messages.append({
+            "role": "user",
+            "content":
+                f"GOAL: {self.goal}\n\nWork toward the goal one tool call "
+                "at a time. This is a continuing session — the history above "
+                "is what you already did, so do not repeat it. When the goal "
+                "is open-ended (e.g. 'keep working the case'), pick the most "
+                "useful next step yourself — typically hunt_run on an "
+                "in-scope seed URL, then hunt_triage — instead of asking the "
+                "operator what to do. If no tool call is needed to answer — "
+                "greetings, questions about yourself, opinions — just reply "
+                "in plain prose; never call a tool for show."},
+        )
         final_answer = ""
 
         for turn in range(1, self.max_turns + 1):
@@ -598,6 +657,21 @@ class HermesAgentLoop:
             if claims:
                 lines.append(f"  claims collected: {claims} — ask 'show the report' for detail")
             final_answer = "\n".join(lines)
+
+        # Continuity: hand this exchange back to the owning session list.
+        self.history.append({"role": "user", "content": self.goal})
+        if final_answer:
+            self.history.append({"role": "assistant",
+                                 "content": final_answer})
+        elif self.calls:
+            ok = [c for c in self.calls if not c.get("error")]
+            summary = ", ".join(
+                f"{c.get('action', '')} "
+                f"{c.get('target', '') or c.get('added', '')}".strip()
+                for c in self.calls[:6])
+            self.history.append({
+                "role": "assistant",
+                "content": f"(executed {len(ok)} tool call(s): {summary})"})
 
         return {
             "mode": "hermes-agent",

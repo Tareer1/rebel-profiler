@@ -211,6 +211,10 @@ class ShellSession:
         self.turns = 0          # agent loops run this session
         self.llm_turns = 0      # LLM replies served (drives the first-turn note)
         self.started = time.time()
+        # Conversation continuity: every agent turn appends its exchange to
+        # this list and the next turn reads the tail — "keep working the
+        # active case" now means what it says.
+        self.history: list[dict] = []
 
 
 def _handler_status(args: str, s: ShellSession) -> None:
@@ -260,6 +264,7 @@ def _handler_new(args: str, s: ShellSession) -> None:
         pass
     s.case_rec = rec
     s.db = s.ctx.open_case(rec["id"])
+    s.history.clear()   # new case → fresh conversation memory
     print(f"  ✓ new case {_bold(rec['id'])} [{rec['status']}] — {name}")
     print(f"  {_dim('say e.g. ' + chr(39) + 'authorize example.com and map it' + chr(39))}")
 
@@ -426,6 +431,7 @@ def _run_agent_turn(ctx, s: ShellSession, line: str) -> None:
         s.case_rec["id"], line, plane=s.plane,
         broker=s.ctx.broker(s.db), evidence=s.ctx.evidence_store(s.db, s.case_rec["id"]),
         db=s.db, max_turns=getattr(s.args, "max_turns", 8), ctx=s.ctx,
+        history=s.history,
     )
     report = loop.run()
     s.llm_turns += 1

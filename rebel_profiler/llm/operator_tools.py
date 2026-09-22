@@ -491,3 +491,210 @@ def _bridge_state() -> dict:
     except OSError:
         return {"host": "127.0.0.1:8765", "up": False,
                 "note": "start it with 'rp bridge'"}
+
+
+# ---------------------------------------------------------------------------
+# hunt → triage → probe: the bounty-hunt workflow as operator tools.
+# Hermes can run the hunt and triage itself; the probe is always a
+# suggestion the operator approves — the PoC stays human-owned.
+
+@operator_tool(
+    "hunt_run",
+    "Run the autonomous JS-surface hunt on one in-scope seed URL (case must "
+    "be active). Mines scripts for endpoints, secrets and cloud hosts, folds "
+    "in Wayback history, ranks everything, registers evidence + claims. "
+    "Follow with hunt_triage.",
+    parameters={
+        "url": "seed page URL, must be inside the case scope",
+        "max_scripts": "optional cap on scripts to mine (1-50, default 25)",
+        "no_wayback": '"yes" to skip Wayback history fold-in',
+    },
+    required=("url",),
+)
+def _hunt_run(ctx, db, case_id, args, scope_engine=None):
+    from ..core.errors import RPError, UsageError
+    from ..evidence.store import EvidenceStore
+    from ..intel.claims import ClaimLedger
+    from ..intel.collection import CollectionPipeline
+    from ..intel.hunt import JsHunter
+    from ..intel.sources import SourceRegistry
+
+    row = db.get_case(case_id)
+    if row is None:
+        raise UsageError(f"case {case_id} not found",
+                         action="list cases with case_list")
+    if str(row["status"]) != "active":
+        raise UsageError(
+            f"case {case_id} is '{row['status']}', not active",
+            reason="the hunter only runs inside an ACTIVE case",
+            action="activate it first: case_activate")
+
+    url = str(args["url"]).strip()
+    if not url.lower().startswith(("http://", "https://")):
+        raise UsageError(
+            f"seed '{url}' is not an http(s) URL",
+            reason="the hunter fetches one seed page, not a bare host",
+            action="pass a full URL like https://host/page")
+    try:
+        max_scripts = int(args.get("max_scripts", 25))
+    except (TypeError, ValueError):
+        max_scripts = 25
+    max_scripts = max(1, min(max_scripts, 50))
+
+    evidence = EvidenceStore(db, blobs_dir=ctx.case_dir(case_id) / "blobs")
+    hunter = JsHunter(case_id, scope_engine=scope_engine
+                      if scope_engine is not None else ctx.scope_engine(),
+                      evidence=evidence, max_scripts=max_scripts)
+    report = hunter.hunt(url, include_wayback=str(
+        args.get("no_wayback", "")).strip().lower() not in ("yes", "true", "1"))
+
+    # Assessable items also become ledger claims, exactly like the CLI.
+    claim_map = {"secret": "js_secret_candidate", "endpoint": "js_endpoint",
+                 "cloud": "js_cloud_host"}
+    ledger = ClaimLedger(SourceRegistry())
+    pipeline = CollectionPipeline(ledger, evidence, SourceRegistry(), db=db)
+    now = time.time()
+    claimed = 0
+    for item in report["items"]:
+        kind = claim_map.get(item["category"])
+        if kind is None:
+            continue
+        value = item["value"][:250]
+        if item["category"] == "endpoint" and item["value"].startswith("/"):
+            value = f"{url.rstrip('/')} {item['value']}"[:250]
+        try:
+            claim = ledger.add(
+                case_id,
+                subject=item["origin"].split("#")[0]
+                if item["origin"].startswith("http") else url,
+                kind=kind if item["category"] != "secret"
+                else f"js_secret:{item['kind']}",
+                value=value, source="js.static", method="js-hunt",
+                observed_at=now, evidence_id=report.get("evidence_id"),
+                notes=f"P{item['priority']} hunt item",
+            )
+            pipeline._persist([claim], case_id)
+            claimed += 1
+        except Exception:
+            continue
+
+    stats = dict(report["stats"])
+    stats["claims_added"] = claimed
+    top = []
+    for item in report["items"][:8]:
+        top.append({
+            "priority": item["priority"], "category": item["category"],
+            "value": item["value"][:120],
+            "suggestion": item["suggestion"][:160],
+        })
+    return {
+        "seed": report["seed"],
+        "evidence_id": report.get("evidence_id"),
+        "stats": stats,
+        "top_items": top,
+        "next": "call hunt_triage for the ranked probe-ready queue",
+    }
+
+
+@operator_tool(
+    "hunt_triage",
+    "Rank the case's collected claims into a probe-ready triage queue "
+    "(secrets first, then exposed storage, then API paths). Every candidate "
+    "carries its full provenance chain and the exact next probe request.",
+    parameters={"limit": "optional max candidates (1-20, default 10)",
+                "subject": "optional single subject to triage"},
+)
+def _hunt_triage(ctx, db, case_id, args, scope_engine=None):
+    from ..intel.claims import ClaimLedger
+    from ..intel.sources import SourceRegistry
+    from ..intel.triage import triage
+
+    try:
+        limit = int(args.get("limit", 10))
+    except (TypeError, ValueError):
+        limit = 10
+    limit = max(1, min(limit, 20))
+    ledger = ClaimLedger.load_from_db(db, case_id, SourceRegistry())
+    return triage(case_id, ledger, limit=limit,
+                  subject=args.get("subject") or None)
+
+
+@operator_tool(
+    "probe_suggest",
+    "Turn one triage candidate into a queued probe request (approval-gated: "
+    "high-risk capability, durable queue, audit trail). Do NOT call this "
+    "without naming an exact target URL from hunt_triage output.",
+    parameters={
+        "url": "exact probe target from hunt_triage's probe_url",
+        "method": "optional HTTP method (default GET)",
+        "data": "optional request body", "header": "optional extra header",
+    },
+    required=("url",),
+)
+def _probe_suggest(ctx, db, case_id, args, scope_engine=None):
+    from ..core.errors import RPError, UsageError
+    from ..execution import ActionRequest
+
+    url = str(args["url"]).strip()
+    if not url.lower().startswith(("http://", "https://")):
+        raise UsageError(
+            f"probe target '{url}' is not an http(s) URL",
+            action="pass the probe_url exactly as hunt_triage listed it")
+    try:
+        probe_adapter = ctx.broker(db).adapters.get("probe")
+        if probe_adapter is None:
+            raise UsageError("probe adapter is not registered",
+                             action="run 'rebel-profiler doctor'")
+        request = ActionRequest(
+            case_id=case_id,
+            capability=probe_adapter.capability_class,
+            action="probe", target=url,
+            params={k: str(args[k]) for k in ("method", "data", "header")
+                    if args.get(k)},
+            requested_by="hermes-agent",
+            reason="triage candidate from hunt workflow",
+        )
+        result = ctx.broker(db).execute(request)
+    except RPError:
+        raise
+    result_payload = result.as_dict()
+    # A high-risk request in a headless session becomes a DURABLE queue
+    # entry; the broker's ExecutionResult says "cancelled" — surface the
+    # queue truth instead so the model (and operator) see the real state.
+    from ..security.approvals import ApprovalQueue
+
+    queued = [a for a in ApprovalQueue(db).list(case_id)
+              if a.get("task_id") == result.task_id]
+    if queued:
+        result_payload["queued_for_approval"] = True
+        result_payload["approval_id"] = queued[0]["id"]
+        result_payload["approval_state"] = queued[0]["state"]
+    result_payload["next"] = (
+        "if queued_for_approval, the operator decides via the approval "
+        "queue (probe_execute runs it only once APPROVED); never retry "
+        "automatically")
+    return result_payload
+
+
+@operator_tool(
+    "probe_execute",
+    "Execute an APPROVED probe by its approval id (the operator decides; "
+    "this only runs a request the approval queue already cleared).",
+    parameters={"approval_id": "id from the approval queue"},
+    required=("approval_id",),
+)
+def _probe_execute(ctx, db, case_id, args, scope_engine=None):
+    from ..core.errors import UsageError
+    from ..security.approvals import ApprovalQueue
+
+    approval_id = str(args["approval_id"]).strip()
+    queue = ApprovalQueue(db)
+    try:
+        rec = queue.get(approval_id)
+    except UsageError:
+        return {"error": False, "action": "probe_execute",
+                "approval_id": approval_id, "found": False,
+                "note": "no such approval — check the queue listing"}
+    result = ctx.broker(db).execute_approved(
+        approval_id, decided_by=ctx.actor)
+    return result.as_dict()
