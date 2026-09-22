@@ -122,8 +122,15 @@ def extract(text: str) -> dict:
 
     for kind, pattern in _SECRET_PATTERNS:
         for match in pattern.finditer(text):
-            value = match.group(1) if match.groups() and match.group(1) \
-                else match.group(0)
+            groups = match.groups()
+            if len(groups) >= 2 and groups[1]:
+                # name="secret" shapes: group 1 is the field NAME,
+                # group 2 is the actual secret — capture the secret.
+                value = groups[1]
+            elif groups:
+                value = groups[0]
+            else:
+                value = match.group(0)
             conf = "high" if kind in {
                 "aws_access_key_id", "google_api_key", "slack_token",
                 "github_token", "private_key_marker", "firebase_url",

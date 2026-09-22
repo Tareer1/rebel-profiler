@@ -427,7 +427,14 @@ def _parse_wafw00f(stdout: str) -> list[tuple[str, str]]:
 
 
 def _parse_js_intel(stdout: str) -> list[tuple[str, str]]:
-    """js-intel: run the jsintel extractor over one fetched JS document."""
+    """js-intel: run the jsintel extractor over one fetched JS document.
+
+    The broker's stdout arrives *redacted* (assignment_secret pattern), so
+    ``apiKey: "<value>"`` shapes may show ``[REDACTED]`` as the value. The
+    fact a key-shaped assignment exists is still the finding — recorded as
+    a secret-candidate claim with the redaction noted, never silently
+    dropped. Confidence stays honest: unverifiable candidates.
+    """
     from .jsintel import extract
 
     report = extract(stdout)
@@ -435,7 +442,10 @@ def _parse_js_intel(stdout: str) -> list[tuple[str, str]]:
     for item in report["endpoints"]:
         pairs.append(("js_endpoint", item["value"]))
     for item in report["secrets"]:
-        pairs.append((f"js_secret:{item['kind']}", item["value"]))
+        redacted = "[REDACTED]" in item["value"] or "REDACTED" in item["value"]
+        value = "(redacted in transit — key-shaped assignment present)" if redacted \
+            else item["value"]
+        pairs.append((f"js_secret:{item['kind']}", value))
     for item in report["hosts"]:
         pairs.append(("js_cloud_host", item["value"]))
     return pairs[:120]

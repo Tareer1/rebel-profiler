@@ -321,7 +321,12 @@ def _fill(template: str, *, url: str, host: str) -> str:
 
 
 def _from_web_claim(claim) -> tuple[BountyFinding, bool]:
-    """One web_finding claim → a finding (or an unmapped observation)."""
+    """One web_finding claim → a finding (or an unmapped observation).
+
+    Non-``web_finding`` kinds (js endpoints, wayback URLs, probe results)
+    are triaged by :func:`_from_recon_claim`; anything not matched there
+    lands in the report's unmapped list for a human to judge.
+    """
     value = claim.value or ""
     rule = _match_rule(value)
     url = _url_from(claim)
@@ -387,6 +392,44 @@ def _from_service_claim(claim) -> tuple[BountyFinding, bool]:
     ), True)
 
 
+def _from_recon_claim(claim) -> tuple[BountyFinding, bool]:
+    """js_secret:* claims → informational triage entries.
+
+    A key/secret *shape* found in shipped JS is a candidate, not a
+    vulnerability: Bugsnag/Sentry client keys are public identifiers by
+    design, cloud bucket URLs appear in legitimate front-ends. The finding
+    exists so the human reviewer sees it with its evidence chain and the
+    honest severity — informational until verified out-of-band.
+    """
+    kind = claim.kind.split(":", 1)[1]
+    value = (claim.value or "")[:200]
+    # Public-by-design client identifiers are not even candidates.
+    public_kinds = {"generic_api_key"}
+    is_public_client = kind == "generic_api_key" and len(value) <= 40 \
+        and value.isalnum()
+    return (BountyFinding(
+        subject=claim.subject,
+        title=f"JS secret candidate ({kind})"
+              + (" — public client identifier, likely benign" if is_public_client
+                 else ""),
+        severity="informational",
+        cwe="",
+        detail=f"kind={kind} value={value} origin-noted-in-evidence",
+        remediation=("Verify out-of-band whether this credential is live and "
+                     "secret. Public client identifiers (Bugsnag/Sentry/"
+                     "Stripe publishable) are not vulnerabilities. If a real "
+                     "secret: revoke+rotate first, then disclose."),
+        reproduce=f"inspect the JS bundle referenced by claim {claim.id}",
+        impact="Potential credential exposure if the value is server-side.",
+        confidence=claim.confidence,
+        evidence_ids=(claim.evidence_id,) if claim.evidence_id else (),
+        claim_ids=(claim.id,),
+        source=claim.source,
+        method=claim.method,
+        observed_at=claim.observed_at,
+    ), True)
+
+
 def assess_claims(claims, *, case_id: str, program: str = "") -> BountyReport:
     """Triage claims into a bounty report. Pure function — no network, no DB."""
     findings: list[BountyFinding] = []
@@ -400,6 +443,8 @@ def assess_claims(claims, *, case_id: str, program: str = "") -> BountyReport:
             finding, mapped = _from_web_claim(claim)
         elif claim.kind == "service":
             finding, mapped = _from_service_claim(claim)
+        elif claim.kind.startswith("js_secret:"):
+            finding, mapped = _from_recon_claim(claim)
         else:
             continue
 

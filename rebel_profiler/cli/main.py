@@ -653,9 +653,17 @@ def cmd_agent(ctx: AppContext, args: argparse.Namespace) -> int:
 
 
 def _cmd_intel_hunt(ctx: AppContext, args: argparse.Namespace) -> int:
-    """Autonomous JS hunt: harvest scripts, mine, rank, one triage queue."""
+    """Autonomous JS hunt: harvest scripts, mine, rank, one triage queue.
+
+    P1/P2 items also become claims in the ledger (js_endpoint, js_secret:*,
+    js_cloud_host) so `bounty assess` and `report` see them — the hunt is a
+    collection action, not just a printout.
+    """
     from ..evidence.store import EvidenceStore
+    from ..intel.claims import ClaimLedger
+    from ..intel.collection import CollectionPipeline
     from ..intel.hunt import JsHunter
+    from ..intel.sources import SourceRegistry
 
     rec = ctx.find_case(args.case_id)
     if rec["status"] != "active":
@@ -665,18 +673,53 @@ def _cmd_intel_hunt(ctx: AppContext, args: argparse.Namespace) -> int:
             action=f"rebel-profiler case activate {rec['id']}")
     db = ctx.open_case(rec["id"])
     try:
+        evidence = EvidenceStore(db, blobs_dir=ctx.case_dir(rec["id"]) / "blobs")
         hunter = JsHunter(
             rec["id"], scope_engine=ctx.scope_engine(),
-            evidence=EvidenceStore(db, blobs_dir=ctx.case_dir(rec["id"]) / "blobs"),
+            evidence=evidence,
             max_scripts=max(1, min(args.max_scripts, 50)),
         )
         report = hunter.hunt(args.url, include_wayback=not args.no_wayback)
+
+        # Ledger claims for the assessable categories (P1 secrets, P2
+        # endpoints/cloud hosts). Historical P3 URLs stay hunt-only — they
+        # are archive artifacts, not observations of the live target.
+        claim_map = {"secret": "js_secret_candidate", "endpoint": "js_endpoint",
+                     "cloud": "js_cloud_host"}
+        pipeline = CollectionPipeline(
+            ClaimLedger(SourceRegistry()), evidence, SourceRegistry(), db=db)
+        now = __import__("time").time()
+        claimed = 0
+        for item in report["items"]:
+            kind = claim_map.get(item["category"])
+            if kind is None:
+                continue
+            value = item["value"][:250]
+            if item["category"] == "endpoint" and item["value"].startswith("/"):
+                value = f"{args.url.rstrip('/')} {item['value']}"[:250]
+            try:
+                claim = pipeline.ledger.add(
+                    rec["id"], subject=item["origin"].split("#")[0]
+                    if item["origin"].startswith("http") else args.url,
+                    kind=kind if item["category"] != "secret"
+                    else f"js_secret:{item['kind']}",
+                    value=value,
+                    source="js.static", method="js-hunt", observed_at=now,
+                    evidence_id=report.get("evidence_id"),
+                    notes=f"P{item['priority']} hunt item",
+                )
+                pipeline._persist([claim], rec["id"])
+                claimed += 1
+            except Exception:
+                continue   # a bad claim never kills the hunt report
+
         stats = report["stats"]
+        stats["claims_added"] = claimed
         lines = [
             f"js hunt on {report['seed']} — "
             f"{stats.get('scripts_mined', 0)} script(s) mined, "
             f"{stats.get('p1', 0)} P1 / {stats.get('p2', 0)} P2 / "
-            f"{stats.get('p3', 0)} P3 item(s)",
+            f"{stats.get('p3', 0)} P3 item(s), {claimed} claim(s)",
             f"  evidence : {report.get('evidence_id')}",
         ]
         for item in report["items"][:20]:
