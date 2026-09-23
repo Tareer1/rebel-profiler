@@ -2690,11 +2690,14 @@ def cmd_doctor(ctx: AppContext, args: argparse.Namespace) -> int:
     hunter_missing = [b for b in ("subfinder", "httpx", "katana", "gau", "arjun",
                                   "nuclei", "amass", "ffuf", "whatweb", "wafw00f")
                       if shutil.which(b) is None]
+    # Advisory, not gating: the adapters degrade gracefully when a binary is
+    # absent (the plan skips the step and says so), so a slim box must still
+    # pass doctor — same philosophy as the optional LLM engines below.
     checks.append({
         "check": "hunter toolset",
-        "ok": "yes" if not hunter_missing else "no",
+        "ok": "yes",
         "detail": ("all 10 hunter binaries available" if not hunter_missing
-                   else f"missing: {', '.join(hunter_missing)} "
+                   else f"optional, missing: {', '.join(hunter_missing)} "
                         "(sudo apt install " + " ".join(hunter_missing) + ")"),
     })
     # Optional LLM engines are informational: the deterministic tiny engine
