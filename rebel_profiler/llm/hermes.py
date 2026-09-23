@@ -128,26 +128,35 @@ def tool_schema(registry) -> list[dict]:
     broker gates on it for every action — a schema that omits it teaches
     the model to omit it too.
     """
+    from ..knowledge.action_guides import find_action_guide
+
     tools = []
     for adapter in registry.list():
+        guide = find_action_guide(adapter.name)
         params = {
             "target": {
                 "type": "string",
-                "description": "host or domain the action applies to",
+                "description": (guide.target_shape if guide
+                                else "host or domain the action applies to"),
             },
         }
         for name in adapter.allowed_params:
-            params[name] = {"type": "string"}
+            meaning = ""
+            if guide:
+                meaning = next((m for n, m in guide.params if n == name), "")
+            params[name] = {"type": "string", **({"description": meaning} if meaning else {})}
         required = ["target"] + [
             p for p in adapter.required_params if p in params
         ]
+        when = guide.when[0] if guide and guide.when else ""
         tools.append({
             "type": "function",
             "function": {
                 "name": adapter.name,
                 "description": (
                     f"{adapter.capability_class} action via {adapter.binary} "
-                    f"against one target"),
+                    f"against one target"
+                    + (f" — use when: {when}" if when else "")),
                 "parameters": {
                     "type": "object",
                     "properties": params,

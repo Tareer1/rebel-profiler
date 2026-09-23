@@ -446,6 +446,34 @@ def cmd_knowledge(ctx: AppContext, args: argparse.Namespace) -> int:
     if args.knowledge_command == "planner-context":
         emit(planner_context(args.domains), args.output)
         return EXIT_SUCCESS
+    if args.knowledge_command == "actions":
+        from ..knowledge import action_guides_context, find_action_guide
+        from ..knowledge.action_guides import coverage_report
+
+        if args.key:
+            guide = find_action_guide(args.key)
+            if guide is None:
+                raise RPError(f"No action guide for '{args.key}'",
+                              action="List covered actions with: "
+                                     "rebel-profiler knowledge actions")
+            emit({"human": f"{guide.action} [{guide.capability_class}]\n"
+                           f"when: {'; '.join(guide.when)}\n"
+                           f"target: {guide.target_shape} (e.g. {guide.target_example})\n"
+                           f"example: {guide.example}\n"
+                           f"claims: {', '.join(guide.output_claims) or '-'}\n"
+                           f"next: {' -> '.join(guide.next_steps) or '-'}",
+                  "data": {"example": guide.example,
+                           "target_shape": guide.target_shape,
+                           "params": [{"name": n, "meaning": m}
+                                      for n, m in guide.params]},
+                  }, args.output)
+        else:
+            bundle = action_guides_context()
+            cov = coverage_report()
+            emit({"human": f"action guides: {bundle['covered']}/{bundle['total']} "
+                           f"covered (complete={cov['complete']})",
+                  "data": bundle}, args.output)
+        return EXIT_SUCCESS
     if args.knowledge_command == "deep-context":
         emit(deep_planner_context(args.domains), args.output)
         return EXIT_SUCCESS
@@ -2947,6 +2975,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_ktech = know_subs.add_parser("techniques", parents=[sub_common], help="techniques per domain (how + defended how)")
     p_ktech.add_argument("key", nargs="?", default="")
     p_ktech.add_argument("--technique", default="", help="show one technique in detail")
+    p_kact = know_subs.add_parser("actions", parents=[sub_common], help="executable action guides: when/how/example/output/next for every action")
+    p_kact.add_argument("key", nargs="?", default="", help="one action name for its full guide")
     p_kpb = know_subs.add_parser("playbook", parents=[sub_common], help="authorized step-ordered playbooks")
     p_kpb.add_argument("key", nargs="?", default="")
     p_kgl = know_subs.add_parser("glossary", parents=[sub_common], help="canonical term definitions")

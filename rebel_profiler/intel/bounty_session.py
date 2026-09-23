@@ -320,9 +320,77 @@ class BountySession:
             raise
         self.result.audit = report
         stats = report.get("stats", {})
-        self._stage("recon", "done",
-                    f"{stats.get('pages_audited', 0)} page(s), "
-                    f"{stats.get('findings', 0)} check(s) fired")
+
+        # Passive knowledge top-up (scope-checked by every adapter's gate):
+        # certificate-transparency + live-host probes on up to three hosts, so
+        # even a tiny LLM's authored scripts reason over surface facts, not
+        # only web-audit findings. Failures here never fail the session —
+        # this is enrichment, not the chain's spine.
+        topup: list[dict] = []
+        from ..execution import ActionRequest, ExecutionBroker
+        from ..execution.broker import AdapterRegistry
+
+        broker = ExecutionBroker(
+            self.db, scope_engine=self.scope_engine,
+            evidence=self.evidence, audit=self.audit,
+            runner=self._local_runner,
+        )
+        for action, target in (
+            ("cert-transparency", self._root_domain()),
+            ("httpx-probe", self._asset_host(0)),
+            ("httpx-probe", self._asset_host(1)),
+        ):
+            if not target:
+                continue
+            adapter = AdapterRegistry().get(action)
+            if adapter is None:
+                continue
+            try:
+                request = ActionRequest(
+                    case_id=self.case_id, capability=adapter.capability_class,
+                    action=action, target=target, params={},
+                    requested_by="bounty-session", reason="knowledge top-up",
+                )
+                outcome = broker.execute(request)
+                topup.append({"action": action, "target": target,
+                              "outcome": outcome.outcome})
+                if outcome.outcome == "succeeded":
+                    from .collection import CollectionPipeline
+
+                    pipeline = CollectionPipeline(
+                        self.ledger, self.evidence, db=self.db,
+                    )
+                    pipeline.ingest(
+                        self.case_id, action=action, target=target,
+                        stdout=outcome.stdout, stderr=outcome.stderr,
+                        returncode=outcome.returncode or 1,
+                        task_id=outcome.task_id,
+                        evidence_id=outcome.evidence_id,
+                    )
+            except Exception:            # enrichment is best-effort, always
+                continue
+        if topup:
+            self._stage("recon", "done",
+                        f"{stats.get('pages_audited', 0)} page(s), "
+                        f"{stats.get('findings', 0)} check(s) fired, "
+                        f"{len(topup)} knowledge top-up run(s)")
+        else:
+            self._stage("recon", "done",
+                        f"{stats.get('pages_audited', 0)} page(s), "
+                        f"{stats.get('findings', 0)} check(s) fired")
+
+    def _local_runner(self, argv: list[str]) -> tuple[int, str, str]:
+        """Run an adapter argv with a bounded timeout — no shell anywhere."""
+        import subprocess
+
+        try:
+            proc = subprocess.run(argv, capture_output=True, text=True,
+                                  timeout=90, check=False)
+            return proc.returncode, proc.stdout, proc.stderr
+        except subprocess.TimeoutExpired:
+            return 124, "", "timed out after 90s"
+        except OSError as exc:
+            return 127, "", f"{type(exc).__name__}: {exc}"
 
     # ASSESS ------------------------------------------------------------------
 
@@ -556,6 +624,22 @@ class BountySession:
                     f"{stats.get('assets', 0)} asset(s)")
 
     # helpers -----------------------------------------------------------------
+
+    def _root_domain(self) -> str:
+        """The registrable tail of the first in-scope asset (best effort)."""
+        host, _port = split_asset(
+            self.result.assets[0] if self.result.assets else "") or ("", None)
+        if not host:
+            return ""
+        parts = host.split(".")
+        return ".".join(parts[-2:]) if len(parts) >= 2 else host
+
+    def _asset_host(self, index: int) -> str:
+        """The hostname of the index-th audited asset, or empty."""
+        if index >= len(self.result.assets):
+            return ""
+        host, _port = split_asset(self.result.assets[index]) or ("", None)
+        return host
 
     def _program(self) -> str:
         try:

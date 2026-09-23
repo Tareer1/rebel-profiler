@@ -161,14 +161,20 @@ class TestGlossary:
 
 
 class TestDeepPlannerContext:
-    def test_schema_v2_complete(self):
+    def test_schema_v3_complete(self):
         ctx = deep_planner_context()
-        assert ctx["schema_version"] == 2
+        assert ctx["schema_version"] == 3
         assert len(ctx["domains"]) == 15
         assert len(ctx["tool_matrix"]) == 8
         assert len(ctx["techniques"]) == 15
         assert ctx["playbooks"]
         assert len(ctx["glossary"]) >= 45
+        # action guides: every live action must be covered in the bundle
+        from rebel_profiler.execution.broker import AdapterRegistry
+
+        guides = {g["action"] for g in ctx["action_guides"]}
+        assert guides == set(AdapterRegistry().names())
+        assert all(g.get("covered") for g in ctx["action_guides"])
 
 
 class TestExpandedCoverage:
@@ -276,8 +282,9 @@ class TestKnowledgeCLI:
         import json
 
         payload = json.loads(capsys.readouterr().out)
-        assert payload["schema_version"] == 2
+        assert payload["schema_version"] == 3
         assert len(payload["domains"]) == 15
+        assert payload["action_guides"]
 
     @pytest.fixture(autouse=True)
     def _isolate(self, tmp_path, monkeypatch):

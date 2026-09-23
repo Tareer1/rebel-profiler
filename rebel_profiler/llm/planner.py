@@ -45,7 +45,25 @@ def build_plan_prompt(view) -> str:
     adapter registry — the model cannot propose what is not printed.
     """
     goal = redact(str(view.goal))[:PROMPT_GOAL_MAX_CHARS]
-    contract = json.dumps(view.available_actions(), indent=2, sort_keys=True)
+    actions = view.available_actions()
+    from ..knowledge.action_guides import find_action_guide
+
+    enriched = []
+    for entry in actions:
+        guide = find_action_guide(str(entry.get("action", "")))
+        merged = dict(entry)
+        if guide is not None:
+            # Token-smart: the first trigger line, truncated — the full guide
+            # stays in deep-context/`knowledge actions` for on-demand reads.
+            # (Live budget finding: full texts pushed a mid-tier prompt past
+            # its context cap.)
+            merged["use_when"] = guide.when[0][:120] if guide.when else ""
+            merged["target_shape"] = guide.target_shape
+            merged["example"] = guide.example
+            if guide.next_steps:
+                merged["follow_with"] = list(guide.next_steps)
+        enriched.append(merged)
+    contract = json.dumps(enriched, indent=2, sort_keys=True)
     return (
         "You are the planner of Rebel Profiler, an authorized security-"
         "operations framework. You PROPOSE actions; the broker decides.\n\n"
@@ -57,7 +75,9 @@ def build_plan_prompt(view) -> str:
         "4. Respond with ONLY a JSON array of proposals — no prose, no fences "
         "other than the example below.\n\n"
         f"GOAL: {goal}\n\n"
-        "AVAILABLE ACTIONS (the only executable contract):\n"
+        "AVAILABLE ACTIONS (the only executable contract; use_when + "
+        "target_shape + example tell you exactly how to fill each request; "
+        "follow_with suggests the next action in a chain):\n"
         f"{contract}\n\n"
         "OUTPUT FORMAT — one JSON array, one object per step, in execution order:\n"
         '```json\n'
