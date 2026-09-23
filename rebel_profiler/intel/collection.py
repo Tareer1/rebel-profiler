@@ -698,7 +698,10 @@ class CollectionPipeline:
             pairs = _parse_dork_hits(stdout,
                                      engine=str(effective_params.get("engine", "google")),
                                      dork=str(effective_params.get("dork", "")))
-        elif effective_action == "subdomain-enum":
+        elif effective_action in {"subdomain-enum", "subfinder-enum"}:
+            # amass and subfinder print one FQDN per line — the same
+            # in-scope-only parser feeds both, so a passive enumeration
+            # never turns out-of-scope archive noise into a claim.
             pairs = _parse_subdomain_lines(stdout, subject)
         elif effective_action == "email-osint":
             pairs = _parse_harvester(stdout, subject)
@@ -785,6 +788,7 @@ class CollectionPipeline:
             "exec-tool": "scan.tool",
             "dork-search": "search.engine",
             "subdomain-enum": "osint.datasource",
+            "subfinder-enum": "osint.datasource",
             "email-osint": "osint.datasource",
             "dir-enum": "scan.web",
             "tech-fingerprint": "scan.web",

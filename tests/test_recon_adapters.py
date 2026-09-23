@@ -141,3 +141,31 @@ class TestParsers:
         assert _parse_wafw00f(
             "No WAF detected on https://x.test") == [("waf", "none detected")]
         assert _parse_wafw00f("generic banner only") == []
+
+    def test_subfinder_pipeline_dispatch(self, tmp_path):
+        """subfinder-enum output must reach the subdomain parser through the
+        pipeline dispatch (regression: the hunter action had no dispatch
+        branch, so a live run emitted 0 claims from 378 real subdomains)."""
+        from rebel_profiler.evidence.store import EvidenceStore
+        from rebel_profiler.intel.claims import ClaimLedger
+        from rebel_profiler.intel.collection import CollectionPipeline
+        from rebel_profiler.intel.sources import SourceRegistry
+        from rebel_profiler.storage.database import Database
+
+        db = Database(tmp_path / "case.db")
+        db.migrate()
+        db.create_case("c1", "test case", case_id="c1")
+        store = EvidenceStore(db, blobs_dir=tmp_path / "blobs")
+        pipeline = CollectionPipeline(ClaimLedger(SourceRegistry()), store,
+                                      db=db)
+        out = ("argv: subfinder -d example.test -silent -recursive\n"
+               "rc: 0\n"
+               "www.example.test\n"
+               "blog.example.test\n"
+               "evil.other.test\n")
+        report = pipeline.ingest(
+            "c1", action="subfinder-enum", target="example.test",
+            stdout=out, returncode=0, task_id="t1")
+        hosts = {c["value"] for c in report["claims"]
+                 if c["kind"] == "hostname"}
+        assert hosts == {"www.example.test", "blog.example.test"}
