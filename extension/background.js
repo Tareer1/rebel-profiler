@@ -303,14 +303,19 @@ async function extractFromTab(tabId, extractors, url) {
  * reads (or the extension holds the host grant); mode is reported honestly.
  */
 async function fetchFallback(url, extractors) {
+  // Bounded like every other await in this worker: a slow or streaming
+  // server must not wedge the run between ack and result (live finding:
+  // crypto.com hung the unbounded fetch forever, job stuck acked).
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15000);
   try {
     // Plain fetch first: it is the one a wildcard-ACAO server accepts.
     // (A credentialed fetch rejects "*" and needs the host grant instead.)
     let res;
     try {
-      res = await fetch(url);
+      res = await fetch(url, { signal: ctrl.signal });
     } catch {
-      res = await fetch(url, { credentials: "include" });
+      res = await fetch(url, { credentials: "include", signal: ctrl.signal });
     }
     if (!res.ok) return null;
     const html = (await res.text()).slice(0, 500000);
@@ -340,6 +345,8 @@ async function fetchFallback(url, extractors) {
     return out;
   } catch {
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
