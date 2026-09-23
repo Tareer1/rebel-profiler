@@ -32,7 +32,12 @@ and follows one non-negotiable design law:
 ## Install
 
 ```bash
-# From the project root (Python 3.11+, stdlib-only core):
+# One command on a fresh Kali/Debian box (venv, PATH symlinks for
+# rp/rp-mcp/rebel-profiler, advisory hunter toolset, hermes-agent MCP
+# wiring when present, doctor verdict):
+./scripts/install.sh          # add --core to skip the hunter binaries
+
+# Or manually (Python 3.11+, stdlib-only core):
 pip install -e .
 rebel-profiler --help
 ```
