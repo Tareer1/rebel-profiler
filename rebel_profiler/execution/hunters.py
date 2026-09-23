@@ -172,10 +172,45 @@ class ArjunAdapter(Adapter):
         ]
 
 
+class NucleiAdapter(Adapter):
+    """Template-based vulnerability scanning (nuclei) against ONE in-scope URL.
+
+    Severity is whitelisted (no info noise by default), the template tag set
+    is capped, and the engine rate is throttled — the program's rate-limit
+    discipline applies to scanners too. Output (-jsonl) is parsed by the
+    collection pipeline into per-finding claims.
+    """
+
+    name = "nuclei-scan"
+    binary = "nuclei"
+    capability_class = "vuln_validation"
+    allowed_params = ("severity", "timeout")
+    required_params = ()
+
+    _SEVERITY = r"(info|low|medium|high|critical|unknown)(,(info|low|medium|high|critical|unknown))*"
+
+    def build_argv(self, request: ActionRequest) -> list[str]:
+        target = _single_token(request.target, field="target", pattern=_URL)
+        severity = _single_token(
+            str(request.params.get("severity", "low,medium,high,critical")),
+            field="severity", pattern=self._SEVERITY)
+        timeout = _single_token(str(request.params.get("timeout", "30")),
+                                field="timeout", pattern=_TIMEOUT)
+        return [
+            self.binary, "-u", target,
+            "-severity", severity,
+            "-jsonl", "-silent", "-no-color",
+            "-rate-limit", "60", "-bulk-size", "10",
+            "-timeout", timeout,
+            "-no-interactsh",   # no out-of-band callbacks without operator opt-in
+        ]
+
+
 HUNTER_ADAPTERS: tuple[type[Adapter], ...] = (
     SubfinderAdapter,
     HttpxAdapter,
     KatanaAdapter,
     GauAdapter,
     ArjunAdapter,
+    NucleiAdapter,
 )

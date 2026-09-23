@@ -412,6 +412,25 @@ _ACTION_GUIDES: tuple[ActionGuide, ...] = (
     ),
     # ------------------------------------------------------ validation
     ActionGuide(
+        action="nuclei-scan",
+        capability_class="vuln_validation",
+        when=("Known endpoints are mapped and you want template-based "
+              "vulnerability checks (known CVE paths, misconfigurations, "
+              "exposed panels) with severity filtering.",
+              "Rate-limited by the adapter; info noise is filtered by default."),
+        target_shape="a full http(s) URL in scope",
+        target_example="https://h1.example.com/",
+        params=(("severity", "csv of info|low|medium|high|critical — "
+                 "default low,medium,high,critical"),
+                ("timeout", "per-request seconds, default 30")),
+        example={"action": "nuclei-scan", "target": "https://h1.example.com/",
+                 "params": {"severity": "medium,high,critical"}},
+        output_claims=("nuclei_finding", "nuclei_detail"),
+        reads_output=("Each template hit names the vulnerability class + host + "
+                      "severity; verify notable hits with probe before reporting."),
+        next_steps=("probe",),
+    ),
+    ActionGuide(
         action="probe",
         capability_class="vuln_validation",
         when=("A specific candidate finding (missing auth, open bucket, "

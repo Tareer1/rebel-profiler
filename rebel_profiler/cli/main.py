@@ -489,6 +489,12 @@ def cmd_intel(ctx: AppContext, args: argparse.Namespace) -> int:
         return _cmd_intel_crawl(ctx, args)
     if args.intel_command == "hunt":
         return _cmd_intel_hunt(ctx, args)
+    if args.intel_command == "attack-plan":
+        from ..intel.claims import ClaimLedger as _CL   # noqa: F401 (used below)
+
+        return _cmd_intel_attack_plan(ctx, args)
+    if args.intel_command == "payload":
+        return _cmd_intel_payload(ctx, args)
     if args.intel_command == "fusion":
         return _cmd_intel_fusion(ctx, args)
     if args.intel_command == "sources":
@@ -676,6 +682,128 @@ def cmd_agent(ctx: AppContext, args: argparse.Namespace) -> int:
         human.append(session["report_human"])
         emit({"human": "\n".join(human), "data": session}, args.output)
         return EXIT_SUCCESS if ok else 1
+    finally:
+        db.close()
+
+
+def _cmd_intel_attack_plan(ctx: AppContext, args: argparse.Namespace) -> int:
+    """"isko hack karne ke tarike dundo": ranked strategies from evidence."""
+    from ..intel.offense import attack_plan
+
+    rec = ctx.find_case(args.case_id)
+    db = ctx.open_case(rec["id"])
+    try:
+        from ..intel.claims import ClaimLedger
+
+        ledger = ClaimLedger.load_from_db(db, rec["id"])
+        plan = attack_plan(rec["id"], ledger)
+    finally:
+        db.close()
+    if args.save_payloads:
+        import json as _json
+        out = ctx.case_dir(rec["id"]) / "attack_plan.json"
+        out.write_text(_json.dumps(plan, indent=2, sort_keys=True) + "\n")
+    human = [f"Attack plan — case {rec['id']} "
+             f"({plan['claims_read']} claims, {plan['subjects']} subject(s))"]
+    for s in plan["strategies"]:
+        human.append(f"  #{s['rank']} [{s['severity_hint']:>9}] {s['title']}")
+        human.append(f"      where  : {s['where']}")
+        human.append(f"      why    : {s['why']}")
+        human.append(f"      action : {s['action']} {s['params'] or ''}")
+        if s["payload_class"]:
+            human.append(f"      payload: {s['payload_class']} "
+                         "(intel payload build → deploy)")
+    if not plan["strategies"]:
+        human.append("  (no evidence yet — run intel collect / intel crawl first)")
+    emit({"human": "\n".join(human), "data": plan}, args.output)
+    return EXIT_SUCCESS
+
+
+def _cmd_intel_payload(ctx: AppContext, args: argparse.Namespace) -> int:
+    """Payload workbench: build / classes / deploy (approval-gated)."""
+    from ..intel.offense import build_payload, deploy_payload, payload_classes
+
+    if args.payload_command == "classes":
+        rows = [{"payload_class": c} for c in payload_classes()]
+        emit({"human": "payload classes: " + ", ".join(payload_classes()),
+              "data": rows}, args.output)
+        return EXIT_SUCCESS
+    if args.payload_command == "build":
+        rec = ctx.find_case(args.case_id)
+        target = args.target or _plan_first_target(rec["id"], ctx)
+        if not target:
+            raise RPError("No target for the payload",
+                          action="Pass --target with an in-scope URL, or run "
+                                 "recon so the case has live hosts.")
+        built = build_payload(args.payload_class, target, args.param or "")
+        human = [f"Payload [{built['payload_class']}] marker={built['marker']}",
+                 f"  target  : {built['target']}",
+                 f"  param   : {built['param']}",
+                 f"  payload : {built['payload'][:80]}",
+                 f"  detect  : {built['detect']}",
+                 "  deploy  : intel payload deploy <case> --payload-class "
+                 f"{built['payload_class']} --approve  (operator yes/no)"]
+        emit({"human": "\n".join(human), "data": built}, args.output)
+        return EXIT_SUCCESS
+    if args.payload_command == "deploy":
+        rec = ctx.find_case(args.case_id)
+        target = args.target or _plan_first_target(rec["id"], ctx)
+        if not target:
+            raise RPError("No target for the payload",
+                          action="Pass --target with an in-scope URL.")
+        built = build_payload(args.payload_class, target, args.param or "")
+        if not args.approve:
+            draft = deploy_payload(rec["id"], built, approved=False)
+            emit({"human": "DRAFT — nothing dispatched. Re-run with --approve "
+                           "to send the operator yes/no decision through.",
+                  "data": draft}, args.output)
+            return 4
+        built["payload"] = args.custom_payload or built["payload"]
+        deployment = deploy_payload(rec["id"], built, approved=True)
+        from ..execution import ActionRequest, ExecutionBroker
+
+        db = ctx.open_case(rec["id"])
+        try:
+            broker = ctx.broker(db)
+            request = ActionRequest(
+                case_id=rec["id"], capability="vuln_validation",
+                action="probe", target=deployment["request"]["target"],
+                params=dict(deployment["request"]["params"]),
+                requested_by=args.actor or "operator",
+                reason=deployment["request"]["reason"],
+            )
+            result = broker.execute(request)
+            collection = None
+            if result.outcome == "succeeded":
+                collection = _collect_result(ctx, db, rec, result,
+                                             request.params)
+        finally:
+            db.close()
+        data = result.as_dict()
+        if collection:
+            data["collection"] = {"claims_emitted": collection["claims_emitted"],
+                                  "clean": collection["clean"]}
+        marker = built.get("marker", "")
+        hit = marker and marker in (result.stdout or "")
+        emit({"human": f"probe {result.outcome} — marker {'FOUND in response' if hit else 'not found in response body'}"
+                       f"\n  task: {result.task_id}  evidence: {result.evidence_id}",
+              "data": data}, args.output)
+        return EXIT_SUCCESS if result.outcome == "succeeded" else 1
+    raise UsageError(f"Unknown payload subcommand")
+
+
+def _plan_first_target(case_id: str, ctx) -> str:
+    """First live-URL claim for the case, or empty — a convenience default."""
+    import re as _re
+
+    db = ctx.open_case(case_id)
+    try:
+        for row in db.claims_for(case_id, None):
+            value = str(row.get("value", ""))
+            if row.get("kind") in {"wayback_url", "js_endpoint"} \
+                    and _re.match(r"^https?://", value):
+                return value
+        return ""
     finally:
         db.close()
 
@@ -3038,6 +3166,31 @@ def build_parser() -> argparse.ArgumentParser:
     p_ihunt.add_argument("--max-scripts", type=int, default=25)
     p_ihunt.add_argument("--no-wayback", action="store_true",
                          help="skip Wayback history fold-in")
+    p_iap = intel_subs.add_parser("attack-plan", parents=[sub_common],
+                                  help="ranked attack strategies from THIS case's evidence — every step names an executable action")
+    p_iap.add_argument("case_id")
+    p_iap.add_argument("--save-payloads", action="store_true",
+                       help="write attack_plan.json into the case directory")
+    p_ipay = intel_subs.add_parser("payload", parents=[sub_common],
+                                   help="payload workbench: build benign impact-markers, deploy them through the approval-gated probe")
+    ipay_subs = p_ipay.add_subparsers(dest="payload_command", required=True)
+    ipay_subs.add_parser("classes", parents=[sub_common],
+                         help="list payload classes")
+    p_ipb = ipay_subs.add_parser("build", parents=[sub_common],
+                                 help="build one benign impact-marker payload for an in-scope target")
+    p_ipb.add_argument("case_id")
+    p_ipb.add_argument("payload_class", help=f"one of: reflected_xss, sqli_error, sqli_timing, ssti, cmdi_echo, open_redirect, idor_pivot, traversal")
+    p_ipb.add_argument("--target", default="", help="in-scope URL (default: first live-URL claim in the case)")
+    p_ipb.add_argument("--param", default="", help="parameter to inject into (default q)")
+    p_ipd = ipay_subs.add_parser("deploy", parents=[sub_common],
+                                 help="deploy a payload through the approval-gated probe (yes/no/custom flow)")
+    p_ipd.add_argument("case_id")
+    p_ipd.add_argument("payload_class")
+    p_ipd.add_argument("--target", default="", help="in-scope URL (default: first live-URL claim)")
+    p_ipd.add_argument("--param", default="", help="parameter to inject into (default q)")
+    p_ipd.add_argument("--approve", action="store_true",
+                       help="OPERATOR YES: dispatch the probe (without it only a draft is shown)")
+    p_ipd.add_argument("--custom-payload", default="", help="operator-edited payload text (custom flow)")
 
     # evidence
     p_ev = subs.add_parser("evidence", parents=[sub_common], help="evidence ledger operations")

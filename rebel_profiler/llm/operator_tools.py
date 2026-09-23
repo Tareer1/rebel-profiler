@@ -266,6 +266,119 @@ def _claims_list(ctx, db, case_id, args, scope_engine=None):
 
 
 @operator_tool(
+    "attack_plan",
+    "Rank concrete attack strategies for this case from its own collected "
+    "evidence: what to try, where, why, which action verifies it. No "
+    "payloads dispatch here — read-only planning over the ledger.",
+)
+def _attack_plan(ctx, db, case_id, args, scope_engine=None):
+    from ..intel.claims import ClaimLedger
+    from ..intel.offense import attack_plan
+
+    ledger = ClaimLedger.load_from_db(db, case_id)
+    return attack_plan(case_id, ledger)
+
+
+@operator_tool(
+    "payload_build",
+    "Build a benign impact-marker payload (xss/sqli/ssti/redirect/idor/...) "
+    "for an in-scope target URL. Marker proves the condition; nothing "
+    "destructive. Returns the built payload; deploy via rp_probe with "
+    "operator approval.",
+    parameters={
+        "payload_class": ("reflected_xss|sqli_error|sqli_timing|ssti|"
+                          "cmdi_echo|open_redirect|idor_pivot|traversal"),
+        "target": "in-scope http(s) URL",
+        "param": "parameter to inject into (default q)",
+    },
+    required=("payload_class", "target"),
+)
+def _payload_build(ctx, db, case_id, args, scope_engine=None):
+    from urllib.parse import urlsplit
+
+    from ..intel.offense import build_payload
+
+    target = str(args.get("target", "")).strip()
+    host = (urlsplit(target).hostname or "").lower()
+    if scope_engine is not None and host:
+        status = scope_engine.evaluate(case_id, host)
+        if status != "in_scope":
+            return {"error": True, "message": f"target out of scope: {host}",
+                    "fix": "Pick a target the case scope authorizes."}
+    return build_payload(str(args.get("payload_class", "")), target,
+                         str(args.get("param", "") or ""))
+
+
+@operator_tool(
+    "payload_deploy",
+    "Deliver a built payload through the approval-gated probe. The model "
+    "CANNOT approve: the operator's explicit decision text decides. "
+    "decision='yes' dispatches; 'no' aborts; 'custom' edits the payload text.",
+    parameters={
+        "payload_class": "same classes as payload_build",
+        "target": "in-scope http(s) URL",
+        "param": "parameter to inject into (default q)",
+        "decision": "yes | no | custom",
+        "custom_payload": "payload text when decision=custom",
+    },
+    required=("payload_class", "target", "decision"),
+)
+def _payload_deploy(ctx, db, case_id, args, scope_engine=None):
+    from urllib.parse import urlsplit
+
+    from ..intel.offense import build_payload, deploy_payload
+
+    decision = str(args.get("decision", "")).strip().lower()
+    if decision not in {"yes", "no", "custom"}:
+        return {"error": True,
+                "message": f"decision must be yes|no|custom, got '{decision}'",
+                "fix": "Ask the operator for an explicit yes/no/custom."}
+    target = str(args.get("target", "")).strip()
+    host = (urlsplit(target).hostname or "").lower()
+    if scope_engine is not None and host:
+        status = scope_engine.evaluate(case_id, host)
+        if status != "in_scope":
+            return {"error": True, "message": f"target out of scope: {host}",
+                    "fix": "Pick a target the case scope authorizes."}
+    built = build_payload(str(args.get("payload_class", "")), target,
+                          str(args.get("param", "") or ""))
+    if decision == "no":
+        return {"approved": False, "dispatched": False,
+                "note": "operator declined — nothing was sent"}
+    if decision == "custom":
+        custom = str(args.get("custom_payload", "") or "").strip()
+        if not custom:
+            return {"error": True, "message": "decision=custom needs custom_payload",
+                    "fix": "Ask the operator for the edited payload text."}
+        built["payload"] = custom[:400]
+    deployment = deploy_payload(case_id, built, approved=True,
+                                requested_by="operator")
+    from ..execution import ActionRequest, ExecutionBroker
+
+    broker = ExecutionBroker(
+        db, scope_engine=scope_engine,
+        evidence=__import__("rebel_profiler.evidence.store", fromlist=["EvidenceStore"]).EvidenceStore(
+            db, blobs_dir=ctx.case_dir(case_id) / "blobs"),
+    )
+    request = ActionRequest(
+        case_id=case_id, capability="vuln_validation", action="probe",
+        target=deployment["request"]["target"],
+        params=dict(deployment["request"]["params"]),
+        requested_by="operator",
+        reason=deployment["request"]["reason"],
+    )
+    result = broker.execute(request)
+    hit = built.get("marker", "") and built["marker"] in (result.stdout or "")
+    return {
+        "approved": True, "dispatched": True,
+        "outcome": result.outcome, "task_id": result.task_id,
+        "evidence_id": result.evidence_id,
+        "marker_found_in_response": bool(hit),
+        "detect": built.get("detect", ""),
+    }
+
+
+@operator_tool(
     "report_generate",
     "Generate the case report from collected claims + evidence.",
 )

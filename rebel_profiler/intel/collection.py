@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from urllib.parse import urlsplit
 
 from ..evidence.store import EvidenceStore
 from .claims import ClaimLedger
@@ -550,6 +551,70 @@ def _parse_probe(stdout: str) -> list[tuple[str, str]]:
     return pairs
 
 
+def _parse_param_hunt(stdout: str, subject: str) -> list[tuple[str, str]]:
+    """arjun output: '<url>\t<param>' rows (-oT) or bare param names.
+
+    Only in-scope hosts become claims — same discipline as the wayback
+    parser: out-of-scope noise from the tool is filtered, never stored.
+    """
+    pairs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    base = subject.lower().lstrip("*.").split(".")[-2:]
+    tail = ".".join(base)
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line or "\t" not in line and "/" in line:
+            # '<url>\t<param>' expected; a URL with no tab is the row header
+            if "\t" in line:
+                pass
+            else:
+                continue
+        url_part, _, param = line.partition("\t")
+        param = (param or url_part).strip().strip("/")
+        if not param or len(param) > 60 or " " in param:
+            continue
+        if "\t" in line:
+            host = (urlsplit(url_part.strip()).hostname or "").lower()
+            if host and not (host == tail or host.endswith("." + tail)):
+                continue
+        if param in seen:
+            continue
+        seen.add(param)
+        pairs.append(("param", param))
+    return pairs[:100]
+
+
+def _parse_nuclei_jsonl(stdout: str) -> list[tuple[str, str]]:
+    """nuclei -jsonl: one JSON object per finding on stdout.
+
+    Each finding contributes (nuclei_finding, '<template> [<severity>] <host>')
+    plus (nuclei_detail, template-meta). Malformed lines are skipped — the
+    engine's progress chatter never becomes a claim.
+    """
+    pairs: list[tuple[str, str]] = []
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        template = str(row.get("template-id") or row.get("templateID") or "").strip()
+        if not template or len(template) > 120:
+            continue
+        severity = str(row.get("info", {}).get("severity", "unknown")
+                       if isinstance(row.get("info"), dict) else "unknown")
+        host = str(row.get("host") or row.get("matched") or "")[:200]
+        name = str((row.get("info") or {}).get("name", "") if isinstance(row.get("info"), dict) else "")[:120]
+        value = f"{template} [{severity}] {host}" + (f" — {name}" if name else "")
+        pairs.append(("nuclei_finding", value))
+        extracted = row.get("extracted-results") or []
+        if isinstance(extracted, list) and extracted:
+            pairs.append(("nuclei_detail", f"{template}: {str(extracted[0])[:160]}"))
+    return pairs[:100]
+
+
 def _parse_ct_json(stdout: str, *, limit: int = 50) -> list[tuple[str, str]]:
     """Parse crt.sh JSON output into (kind, value) pairs.
 
@@ -727,6 +792,12 @@ class CollectionPipeline:
             pairs = _parse_httpx_json(stdout)
         elif effective_action == "probe":
             pairs = _parse_probe(stdout)
+        elif effective_action == "param-hunt":
+            # arjun -oT prints "<url>\t<param>" per discovered parameter;
+            # bare parameter names (no tab) are the fallback contract.
+            pairs = _parse_param_hunt(stdout, subject)
+        elif effective_action == "nuclei-scan":
+            pairs = _parse_nuclei_jsonl(stdout)
         else:
             pairs = []
 
@@ -800,6 +871,7 @@ class CollectionPipeline:
             "katana-crawl": "scan.web",
             "httpx-probe": "scan.web",
             "param-hunt": "scan.web",
+            "nuclei-scan": "scan.nuclei",
             "probe": "scan.web",
         }.get(action, "unknown")
 
