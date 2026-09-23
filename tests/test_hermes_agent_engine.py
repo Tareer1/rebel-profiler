@@ -126,6 +126,11 @@ class TestContract:
 class TestPlaneWiring:
     def test_plane_pin_selects_hermes(self, stub_bin, monkeypatch):
         stub, _ = stub_bin
+        # Hermetic: pin BOTH the engine and the binary — otherwise a machine
+        # with a real ~/.local/bin/hermes would satisfy the pin and CI (which
+        # has none) would raise, i.e. the test would pass on one box and fail
+        # on another for an environmental reason.
+        monkeypatch.setenv("RP_HERMES_BIN", str(stub))
         monkeypatch.setenv("RP_LLM__ENGINE", "hermes")
         plane = ModelPlane(limits=DEFAULT_LIMITS["mid"], prefer_engine="hermes")
         engine = plane.select_engine("")
