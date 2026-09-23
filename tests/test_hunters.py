@@ -45,7 +45,10 @@ class TestHunterAdapters:
 
     def test_httpx_argv_json_mode(self):
         argv = _argv("httpx-probe", "example.test:8443")
-        assert argv[0] == "httpx" and "-json" in argv
+        # Kali names the ProjectDiscovery binary httpx-toolkit; upstream
+        # ships plain httpx. Either is a correct resolution — the contract
+        # is the argv shape, not which package the box happens to carry.
+        assert argv[0] in ("httpx-toolkit", "httpx") and "-json" in argv
         assert "example.test:8443" in argv
 
     def test_katana_depth_is_capped(self):

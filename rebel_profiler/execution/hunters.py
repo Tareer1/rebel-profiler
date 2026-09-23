@@ -62,22 +62,40 @@ class HttpxAdapter(Adapter):
 
     Runs against ONE validated in-scope host (the broker checks the target;
     the runner never sees a list file), JSON to stdout for clean parsing.
+
+    Kali ships the ProjectDiscovery toolkit as ``httpx-toolkit`` (the bare
+    ``httpx`` name belongs to the Python HTTP client), so the adapter
+    resolves the real binary at build time: httpx-toolkit first, plain
+    httpx second, and the declared name as last resort so the broker's
+    missing-binary message stays truthful.
     """
 
     name = "httpx-probe"
     binary = "httpx"
-    capability_class = "recon"
+    # "recon" is not a declared capability class and would fail conservative
+    # (unknown → critical → deny); a liveness/tech probe against one
+    # in-scope host is plain discovery.
+    capability_class = "discovery"
     allowed_params = ("timeout",)
     required_params = ()
 
     _HOST = r"[A-Za-z0-9.-]+(?::\d{2,5})?"
+
+    @staticmethod
+    def _resolve_binary() -> str:
+        import shutil
+
+        for candidate in ("httpx-toolkit", "httpx"):
+            if shutil.which(candidate):
+                return candidate
+        return HttpxAdapter.binary
 
     def build_argv(self, request: ActionRequest) -> list[str]:
         host = _single_token(request.target, field="host", pattern=self._HOST)
         timeout = _single_token(str(request.params.get("timeout", "10")),
                                 field="timeout", pattern=_TIMEOUT)
         return [
-            self.binary, "-u", host, "-json", "-silent",
+            self._resolve_binary(), "-u", host, "-json", "-silent",
             "-status-code", "-title", "-tech-detect", "-ip",
             "-follow-redirects", "-no-color",
             "-timeout", timeout,
