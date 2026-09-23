@@ -214,6 +214,7 @@ install command for each; `llm local` lists what is already on disk.
 | `gguf` | one GGUF file (llama.cpp / Ollama / LM Studio exports) | `llama-cpp-python` |
 | `native` | HF safetensors checkpoints already in the local cache | `torch` |
 | `airllm` | AirLLM layer streaming, AutoModel across families | `airllm` + `torch` |
+| `hermes` | the installed Nous Research hermes-agent CLI (oneshot, `safe` toolset) | the `hermes` binary |
 | `external` | an OpenAI-compatible endpoint, explicitly pinned | API key |
 | `tiny` | nothing — deterministic fallback, never hallucinates | (built in) |
 
@@ -222,7 +223,30 @@ rebel-profiler llm setup                     # hardware-aware guidance
 rebel-profiler llm local                     # checkpoints on disk + run commands
 rebel-profiler llm generate "…" --model /path/to/model.gguf
 rebel-profiler llm generate "…" --local      # best local model that fits the tier
+RP_LLM__ENGINE=hermes rebel-profiler hermes "map the scope"   # the REAL hermes-agent as the brain
 ```
+
+### rp-mcp: the real hermes-agent drives Rebel Profiler
+
+The supported integration with the actual [hermes-agent](https://github.com/NousResearch/hermes-agent)
+install is MCP, not prompt-fighting: `rp-mcp` serves the operator tools
+(status, claims, approvals, hunt/triage, probe, browser, reports, verification)
+as MCP stdio tools pinned to ONE case. Wire it once:
+
+```yaml
+# ~/.hermes/config.yaml
+mcp_servers:
+  rebel-profiler:
+    command: <repo>/.venv/bin/rp-mcp
+    args: ["--case", "<case-id>"]
+```
+
+Then the agent calls `rp_system_status`, `rp_approval_list`, `rp_hunt_run`,
+`rp_probe_suggest` … natively — and every call lands in the same
+`operator_tools.execute` validation the CLI and the local Hermes loop use:
+scope, policy, risk, evidence, audit. The approval queue stays human-owned:
+`rp_approval_decide` requires an explicit approve/deny and records the
+operator as the decider.
 
 GGUF discovery is bounded and offline (`RP_LLM__GGUF_DIRS`, the project tree,
 and the usual llama.cpp / Ollama / LM Studio / HF roots). The quantization tag
@@ -545,10 +569,12 @@ machine-specific install commands.
 
 ## Status
 
-Current release: **v1.4.0** — 769 tests passing, CI green. Phases 1–6
+Current release: **v1.4.0** — 858 tests passing, CI green. Phases 1–6
 complete: core foundation, OSINT/recon intelligence, surface &
 fusion, case workflows/RBAC, platform integrations (worker plane, browser
-bridge, Feature Forge, complaint packages) and QA acceptance. See
+bridge, Feature Forge, complaint packages) and QA acceptance. The browser
+console (`frontend/`) ships in Phase 9: a local-only GUI over the read-only
+gateway and the whitelisted JSON CLI. See
 [ROADMAP.md](ROADMAP.md) for the shipped checklist and
 [ARCHITECTURE.md](ARCHITECTURE.md) for the plane model and data flow.
 

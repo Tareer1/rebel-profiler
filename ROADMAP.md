@@ -165,3 +165,50 @@ evidence-free claims, scope always fail-closed, LLM proposes but never decides.
   techniques and glossary terms
 - [x] **Repo hygiene** — model weights are gitignored (a multi-GB checkpoint
   must never enter the repository), so the tree is always safe to publish
+
+## Phase 9 — GUI: the browser console ✅
+
+- [x] **Local-only proxy** (`frontend/proxy.py`, stdlib-only): serves the GUI,
+  proxies the read-only ApiGateway (`/api/state`, `/api/events`), and exposes
+  a **whitelisted** JSON CLI surface (`POST /api/cli`) — fixed argv templates
+  with validated slots (case ids, single tokens, positional text), output
+  mode server-enforced (`-o json` always appended), no shell anywhere
+- [x] **Honest Hermes stream** (`GET /api/hermes/stream`): SSE of one
+  `hermes --oneshot` run — raw lines only, validated goal/case/tier, bounded
+  run time, no fake progress
+- [x] **The console** (`frontend/index.html`): dark Hermes aesthetic per
+  docs/frontend.md — dashboard (live claims/evidence/audit head + events),
+  case create → scope → activate, Hermes chat with a real elapsed timer and
+  terminal view, dork console, surface map, browser-bridge grab, settings
+- [x] **Fail-closed GUI law**: the browser has exactly one write path (the
+  whitelist); every whitelisted command still passes the broker's six gates;
+  structured errors surface verbatim with their action hints
+- [x] Proxy contract pinned by tests (`tests/test_gui_proxy.py`)
+
+## Phase 10 — The real Hermes agent ✅
+
+- [x] **`hermes` LLM engine** (`llm/hermes_agent.py`): the operator's
+  installed Nous Research hermes-agent CLI as a ModelPlane engine —
+  `RP_LLM__ENGINE=hermes` pins it, `RP_HERMES_BIN` relocates it, the child
+  runs with the `safe` toolset (no terminal, no file tools), prompts are
+  redacted outbound and inbound, every call is timeout-bounded, and it is
+  opt-in only: the auto selection chain never lands on it silently
+- [x] **`rp-mcp` server** (`llm/hermes_mcp.py`): the operator tools
+  (status/claims/approvals/hunt/triage/probe/browser/reports/verify) exposed
+  as an MCP stdio JSON-RPC server pinned to ONE case — the supported
+  integration direction for the real hermes-agent, which calls `rp_*`
+  tools natively while every call still passes the same validation and
+  gates (`rp-mcp --case <id>`; wired via `mcp_servers:` in the agent config)
+- [x] **Approval loop closed in chat**: `approval_list` and
+  `approval_decide` operator tools — hermes can show the pending queue and,
+  after the operator's explicit decision, approve+execute+ingest claims to
+  the ledger in one gated step; the model can never manufacture the
+  decision (approve/deny validation, operator-recorded as the decider)
+- [x] **Frontend completion**: approval-queue screen (decide + run from the
+  GUI), SVG surface graph (hub layout from `surface show`), audit-chain
+  visual (hash-linked timeline), bridge token popup (reveal/copy), bridge
+  status chip + diagnostics, and the matching proxy whitelist entries —
+  all still one write path through the whitelist
+- [x] Tests: engine contract (stub binary, offline), MCP wire protocol,
+  approval flow end to end (queue → decision → execution → claims), GUI
+  whitelist extensions — suite green (885 passing)

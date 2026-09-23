@@ -207,4 +207,4 @@ def _plane_from_env() -> ModelPlane:
     limits = resolve_limits()
     prefer = os.environ.get("RP_LLM__ENGINE", "").strip().lower()
     return ModelPlane(limits=limits,
-                      prefer_engine=prefer if prefer in {"tiny", "airllm", "external", "gguf", "native"} else None)
+                      prefer_engine=prefer if prefer in {"tiny", "airllm", "external", "gguf", "native", "hermes"} else None)

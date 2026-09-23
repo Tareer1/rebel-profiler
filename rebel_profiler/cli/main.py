@@ -1514,7 +1514,7 @@ def cmd_agent_chat(ctx: AppContext, args: argparse.Namespace) -> int:
         prefer = os.environ.get("RP_LLM__ENGINE", "").strip().lower()
         plane = ModelPlane(
             limits=resolve_limits(tier=_llm_tier_arg(args)),
-            prefer_engine=prefer if prefer in {"tiny", "airllm", "external", "gguf", "native"} else None)
+            prefer_engine=prefer if prefer in {"tiny", "airllm", "external", "gguf", "native", "hermes"} else None)
         try:
             if plane.engine is None:
                 plane.select_engine(_hermes_model_pin(ctx, args))
@@ -1552,7 +1552,7 @@ def _hermes_repl_plane(args) -> "ModelPlane":
     prefer = os.environ.get("RP_LLM__ENGINE", "").strip().lower()
     return ModelPlane(
         limits=resolve_limits(tier=_llm_tier_arg(args)),
-        prefer_engine=prefer if prefer in {"tiny", "airllm", "external", "gguf", "native"} else None)
+        prefer_engine=prefer if prefer in {"tiny", "airllm", "external", "gguf", "native", "hermes"} else None)
 
 
 def _cmd_agent_chat_repl(ctx: AppContext, args: argparse.Namespace,
@@ -1627,7 +1627,7 @@ def cmd_hermes(ctx: AppContext, args: argparse.Namespace, plane=None) -> int:
     prefer = os.environ.get("RP_LLM__ENGINE", "").strip().lower()
     plane = plane or ModelPlane(
         limits=resolve_limits(tier=_llm_tier_arg(args)),
-        prefer_engine=prefer if prefer in {"tiny", "airllm", "external", "gguf", "native"} else None)
+        prefer_engine=prefer if prefer in {"tiny", "airllm", "external", "gguf", "native", "hermes"} else None)
     try:
         if plane.engine is None:
             plane.select_engine(_hermes_model_pin(ctx, args))
@@ -2008,6 +2008,9 @@ def cmd_llm(ctx: AppContext, args: argparse.Namespace) -> int:
             airllm_ok = importlib.util.find_spec("airllm") is not None
         except Exception:
             airllm_ok = False
+        from ..llm.hermes_agent import engine_env_status as _hermes_env
+
+        hermes_env = _hermes_env()
         payload = {
             "budget": budget,
             "recommended_tier": recommend(budget),
@@ -2023,6 +2026,7 @@ def cmd_llm(ctx: AppContext, args: argparse.Namespace) -> int:
             "airllm_installed": airllm_ok,
             "llama_cpp_installed": _module_present("llama_cpp"),
             "torch_installed": _module_present("torch"),
+            "hermes_agent": hermes_env,
             "local_models": _local_model_counts(),
             "engine": plane.engine_kind or "none",
             "model": "",
@@ -2041,7 +2045,8 @@ def cmd_llm(ctx: AppContext, args: argparse.Namespace) -> int:
             f"llm status: tier={payload['tier']} "
             f"(recommended {payload['recommended_tier']})  "
             f"ram={budget['total_ram_mb']}MB  cpu_only={budget['cpu_only']}  "
-            f"airllm={'yes' if airllm_ok else 'no (tiny engine fallback)'}"
+            f"airllm={'yes' if airllm_ok else 'no (tiny engine fallback)'}  "
+            f"hermes-agent={'yes (' + hermes_env['version'] + ')' if hermes_env['installed'] else 'not installed (RP_LLM__ENGINE=hermes unavailable)'}"
         ), "data": payload}, args.output)
         return EXIT_SUCCESS
 
@@ -2244,6 +2249,51 @@ def cmd_bounty(ctx: AppContext, args: argparse.Namespace) -> int:
     """
     from ..intel.bounty import assess
     from ..intel.program import parse_scope_file
+
+    if args.bounty_command == "fetch":
+        rec = ctx.find_case(args.case_id)
+        db = ctx.open_case(rec["id"])
+        try:
+            creds = _h1_credentials(ctx, db, rec["id"], args)
+            if creds is None:
+                raise UsageError(
+                    "No HackerOne API credentials found",
+                    reason="bounty fetch uses the authenticated Hacker API — it "
+                           "never scrapes and never runs without credentials.",
+                    action="Store them once: rebel-profiler credential store "
+                           f"{rec['id']} hackerone-api-identity --scope bounty-fetch "
+                           "… (and hackerone-api-token), or export H1_API_USERNAME / "
+                           "H1_API_TOKEN.",
+                )
+            identity, token = creds
+            from ..intel.h1_fetch import fetch_program_document
+
+            try:
+                doc = fetch_program_document(args.handle, identity, token)
+            except (RuntimeError, ValueError) as exc:
+                raise UsageError(str(exc), action="Check the handle and "
+                                                  "credentials, then retry.") from exc
+            _import_scope_document(ctx, db, rec, doc, args.program or args.handle,
+                                   activate=args.activate)
+            human = [
+                f"Fetched HackerOne program '{doc['program_name']}' ({args.handle})",
+                f"  in-scope   : {len(doc['includes'])}",
+                f"  exclusions : {len(doc['excludes'])}",
+                f"  skipped    : {len(doc['skipped'])}",
+                f"  source     : {doc['program_url']}",
+            ]
+            emit({"human": "\n".join(human), "data": {
+                "case": rec["id"], "program": args.handle,
+                "includes": len(doc["includes"]),
+                "excludes": len(doc["excludes"]),
+                "skipped": len(doc["skipped"]),
+                "activated": args.activate}}, args.output)
+            return EXIT_SUCCESS
+        finally:
+            db.close()
+
+    if args.bounty_command == "hunt":
+        return _cmd_bounty_hunt(ctx, args)
 
     if args.bounty_command == "import":
         rec = ctx.find_case(args.case_id)
@@ -2471,6 +2521,154 @@ def cmd_bounty(ctx: AppContext, args: argparse.Namespace) -> int:
     raise UsageError(f"Unknown bounty command '{args.bounty_command}'")
 
 
+def _h1_credentials(ctx: AppContext, db, case_id: str, args) -> tuple[str, str] | None:
+    """H1 credentials: flags > env > the case credential broker (audited)."""
+    import os
+
+    identity = str(getattr(args, "api_identity", "") or "").strip() \
+        or os.environ.get("H1_API_USERNAME", "").strip()
+    token = str(getattr(args, "api_token", "") or "").strip() \
+        or os.environ.get("H1_API_TOKEN", "").strip()
+    if identity and token:
+        return identity, token
+    try:
+        from ..security.credentials import CredentialBroker
+
+        broker = CredentialBroker(db, AuditChain(db))
+        identity = identity or str(broker.use(case_id, "hackerone-api-identity",
+                                              purpose="bounty-fetch",
+                                              actor=ctx.actor) or "")
+        token = token or str(broker.use(case_id, "hackerone-api-token",
+                                        purpose="bounty-fetch",
+                                        actor=ctx.actor) or "")
+    except Exception:
+        return None
+    if identity and token:
+        return identity, token
+    return None
+
+
+def _import_scope_document(ctx: AppContext, db, rec: dict, doc: dict,
+                           program: str, *, activate: bool) -> None:
+    """Write a parsed scope document into the case (shared by import/fetch/hunt)."""
+    source_note = doc["authorization_source"]
+    for entry in doc["includes"]:
+        note = " | ".join(x for x in (source_note, entry["note"]) if x)
+        db.add_scope_entry(rec["id"], entry["value"], excluded=False, note=note)
+    for entry in doc["excludes"]:
+        note = " | ".join(x for x in (f"EXCLUDED | {source_note}", entry["note"]) if x)
+        db.add_scope_entry(rec["id"], entry["value"], excluded=True, note=note)
+    if activate:
+        ctx.set_case_status(rec["id"], "active")
+
+
+def _cmd_bounty_hunt(ctx: AppContext, args: argparse.Namespace) -> int:
+    """``bounty hunt <handle>`` — the whole chain, no questions asked.
+
+    fetch scope → create/reuse case → import + activate → the full
+    BountySession chain (recon/audit/assess/author/repair) → report.
+    Every stage still passes its own gates; zero-questions applies to the
+    OPERATOR, never to the policy engine.
+    """
+    from ..core.errors import RPError as _RPError
+    from ..evidence.audit import AuditChain as _AuditChain
+    from ..intel.bounty_session import BountySession
+    from ..intel.claims import ClaimLedger as _ClaimLedger
+    from ..intel.sources import SourceRegistry as _SourceRegistry
+    from ..llm.codescript import default_script_dir
+
+    def _stage(record: dict) -> None:
+        if args.verbose:
+            detail = record.get("detail", "")
+            print(f"  [{record.get('status', '?')}] {record['stage']}"
+                  + (f" — {detail}" if detail else ""), file=sys.stderr)
+
+    # Stage 0: credentials BEFORE any case mutation — fail closed, early.
+    probe_case = ctx.find_case(args.case_id) if args.case_id else None
+    db0 = ctx.open_case(probe_case["id"]) if probe_case else None
+    try:
+        creds = _h1_credentials(ctx, db0, probe_case["id"] if probe_case else "",
+                                args) if db0 is not None else None
+        if creds is None:
+            # fall back to env-only check so the error names the real blocker
+            import os
+
+            if not (os.environ.get("H1_API_USERNAME") and os.environ.get("H1_API_TOKEN")):
+                raise UsageError(
+                    "No HackerOne API credentials found",
+                    reason="bounty hunt fetches the live program scope; without "
+                           "credentials it cannot know what is authorized.",
+                    action="Store them once in any case: rebel-profiler credential "
+                           "store <case-id> hackerone-api-identity --scope bounty-fetch "
+                           "…, or export H1_API_USERNAME / H1_API_TOKEN.",
+                )
+    finally:
+        if db0 is not None:
+            db0.close()
+
+    # Stage 1: case — fresh or reused
+    if args.case_id:
+        rec = ctx.find_case(args.case_id)
+    else:
+        name = f"H1 {args.handle} — auto hunt"
+        rec = ctx.create_case(name, f"program: https://hackerone.com/{args.handle}")
+        db = ctx.open_case(rec["id"])
+        try:
+            creds = _h1_credentials(ctx, db, rec["id"], args)
+        finally:
+            db.close()
+
+    db = ctx.open_case(rec["id"])
+    try:
+        from ..intel.h1_fetch import fetch_program_document
+
+        identity, token = creds
+        try:
+            doc = fetch_program_document(args.handle, identity, token)
+        except (RuntimeError, ValueError) as exc:
+            raise UsageError(
+                f"HackerOne fetch failed: {exc}",
+                action="Check the program handle and API credentials.") from exc
+        _import_scope_document(ctx, db, rec, doc, args.handle, activate=True)
+        rec = ctx.find_case(rec["id"])   # refresh status after activation
+
+        session = BountySession(
+            rec["id"],
+            goal=(f"HackerOne program {args.handle}: stay strictly inside the "
+                  "imported scope, enumerate and audit every in-scope asset, "
+                  "assess what was observed, and produce a report with real "
+                  "results — no demos."),
+            db=db, scope_engine=ctx.scope_engine(),
+            case_dir=ctx.case_dir(rec["id"]), case_status=rec["status"],
+            ledger=_ClaimLedger(_SourceRegistry()),
+            evidence=ctx.evidence_store(db, rec["id"]),
+            audit=_AuditChain(db),
+            max_assets=max(1, args.max_assets), max_pages=args.max_pages,
+            max_scripts=0 if args.no_author else args.max_scripts,
+            max_repair_rounds=2, scheme=args.scheme, model="",
+            tier=args.tier,
+            script_dir=default_script_dir(ctx.data_dir),
+            author_scripts=not args.no_author,
+            on_stage=_stage,
+        )
+        result = session.run()
+        findings = (result.report or {}).get("findings") or []
+        if args.save:
+            out_dir = ctx.case_dir(rec["id"]) / "reports"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            path = out_dir / f"hunt-{args.handle}-{rec['id']}.json"
+            path.write_text(json.dumps(result.as_dict(), indent=2,
+                                       sort_keys=True, default=str) + "\n")
+            result.stats["report_path"] = str(path)
+        emit({"human": result.render_human(), "data": result.as_dict()},
+             args.output)
+        return EXIT_SUCCESS if findings else 1
+    except _RPError:
+        raise
+    finally:
+        db.close()
+
+
 def cmd_doctor(ctx: AppContext, args: argparse.Namespace) -> int:
     import shutil
 
@@ -2489,6 +2687,16 @@ def cmd_doctor(ctx: AppContext, args: argparse.Namespace) -> int:
         found = shutil.which(b) is not None
         checks.append({"check": f"tool: {b}", "ok": "yes" if found else "no",
                        "detail": "available" if found else "not installed (adapters will refuse)"})
+    hunter_missing = [b for b in ("subfinder", "httpx", "katana", "gau", "arjun",
+                                  "nuclei", "amass", "ffuf", "whatweb", "wafw00f")
+                      if shutil.which(b) is None]
+    checks.append({
+        "check": "hunter toolset",
+        "ok": "yes" if not hunter_missing else "no",
+        "detail": ("all 10 hunter binaries available" if not hunter_missing
+                   else f"missing: {', '.join(hunter_missing)} "
+                        "(sudo apt install " + " ".join(hunter_missing) + ")"),
+    })
     # Optional LLM engines are informational: the deterministic tiny engine
     # always exists, so a missing optional dependency is never a failure.
     for module, label in (("llama_cpp", "llm engine: gguf (llama-cpp-python)"),
@@ -3090,7 +3298,7 @@ def build_parser() -> argparse.ArgumentParser:
                                    help="hardware-aware setup: what to install for each "
                                         "engine, with copy-paste commands")
     p_lsetup.add_argument("--engine", default=None,
-                          choices=["airllm", "gguf", "native", "external"])
+                          choices=["airllm", "gguf", "native", "external", "hermes"])
     p_lsetup.add_argument("--tier", default=None, choices=list(_llm_tiers()))
     p_lgen = llm_subs.add_parser("generate", parents=[sub_common],
                                  help="one bounded generation (engine loads and unloads)")
@@ -3100,7 +3308,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_lgen.add_argument("--max-tokens", type=int, default=None)
     p_lgen.add_argument("--tier", default=None, choices=list(_llm_tiers()))
     p_lgen.add_argument("--engine", default=None,
-                        choices=["airllm", "gguf", "native", "tiny", "external"])
+                        choices=["airllm", "gguf", "native", "tiny", "external", "hermes"])
     p_lgen.add_argument("--compression", default="", choices=["", "4bit", "8bit"])
     p_lgen.add_argument("--local", action="store_true",
                         help="use the best LOCAL checkpoint that fits this tier "
@@ -3205,9 +3413,22 @@ def build_parser() -> argparse.ArgumentParser:
                                                        "the authorization source)")
     p_bimp.add_argument("--activate", action="store_true",
                         help="activate the case right away (default: leave it for review)")
+    p_bfetch = bounty_subs.add_parser("fetch", parents=[sub_common],
+                                      help="fetch a HackerOne program's structured scope "
+                                           "directly (API credentials via the credential "
+                                           "broker, env, or flags) and import it into a case")
+    p_bfetch.add_argument("case_id")
+    p_bfetch.add_argument("handle", help="program handle, e.g. 'github' for "
+                                          "hackerone.com/github")
+    p_bfetch.add_argument("--api-identity", default="", help="H1 API identity "
+                            "(default: credential broker / H1_API_USERNAME)")
+    p_bfetch.add_argument("--api-token", default="", help="H1 API token "
+                          "(default: credential broker / H1_API_TOKEN)")
+    p_bfetch.add_argument("--activate", action="store_true",
+                          help="activate the case right after import")
     p_bassess = bounty_subs.add_parser("assess", parents=[sub_common],
-                                       help="triage collected evidence into reportable "
-                                            "findings with severity, CWE and reproduction")
+                                    help="triage collected evidence into reportable "
+                                         "findings with severity, CWE and reproduction")
     p_bassess.add_argument("case_id")
     p_breport = bounty_subs.add_parser("report", parents=[sub_common],
                                        help="final submission-ready report (real evidence only)")
@@ -3247,6 +3468,29 @@ def build_parser() -> argparse.ArgumentParser:
                          help="also write the full session JSON into the case's reports/")
     p_bauto.add_argument("--verbose", action="store_true",
                          help="stream each stage as it runs (stderr)")
+    p_bhunt = bounty_subs.add_parser(
+        "hunt", parents=[sub_common],
+        help="THE front door: HackerOne handle in, an evidenced bounty report out. "
+             "Fetches the program scope, authorizes it, runs the full recon/audit "
+             "chain, assesses and reports — no questions asked, everything gated.")
+    p_bhunt.add_argument("handle", help="program handle (hackerone.com/<handle>)")
+    p_bhunt.add_argument("--case", dest="case_id", default="",
+                         help="existing case to reuse (default: a fresh one is created)")
+    p_bhunt.add_argument("--api-identity", default="",
+                         help="H1 API identity (default: broker / H1_API_USERNAME)")
+    p_bhunt.add_argument("--api-token", default="",
+                         help="H1 API token (default: broker / H1_API_TOKEN)")
+    p_bhunt.add_argument("--max-assets", type=int, default=15)
+    p_bhunt.add_argument("--max-pages", type=int, default=25)
+    p_bhunt.add_argument("--max-scripts", type=int, default=0,
+                         help="cap on LLM-authored scripts (0 = deterministic chain)")
+    p_bhunt.add_argument("--scheme", default="https", choices=["https", "http"])
+    p_bhunt.add_argument("--tier", default=None, choices=list(_llm_tiers()))
+    p_bhunt.add_argument("--no-author", action="store_true",
+                         help="skip LLM script authoring (deterministic audit + report)")
+    p_bhunt.add_argument("--save", action="store_true",
+                         help="write the session JSON into the case's reports/")
+    p_bhunt.add_argument("--verbose", action="store_true", help="stream stages to stderr")
 
     # doctor
     subs.add_parser("doctor", parents=[sub_common], help="environment and configuration health check")

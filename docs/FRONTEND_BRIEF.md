@@ -118,8 +118,25 @@ rebel-profiler serve <case-id> --port 8899 --token <secret>   # API
 curl -H "Authorization: Bearer <sha256(secret)>" localhost:8899/state
 ```
 
-Frontend folder: `frontend/` (abhi nahi hai — tum banana). Is brief ko padhkar
-seedha Phase F1 shuru kar sakte ho.
+Frontend folder: `frontend/` **ab exists karta hai** — `proxy.py` (stdlib-only,
+CLI whitelist + gateway proxy + hermes SSE) aur `index.html` (dark Hermes
+console, F1+F2+F3 ka core) ships with the repo. Tests: `tests/test_gui_proxy.py`.
+Is brief ka baaki plan **ab complete hai**: surface SVG graph (`surface show`
+se hub layout), audit-chain visual (hash-linked timeline), bridge token
+popup (reveal/copy), approval-queue screen (approve+run / deny buttons —
+decision operate ki hoti hai, gates phir bhi broker ke), aur `bridge status`
+chip + diagnostics. Naye proxy whitelist entries: `approvals_list`,
+`approval_decide`, `approval_run`, `audit_show`, `surface_show`,
+`surface_build`, `evidence_verify`.
+
+**Bonus — asli hermes-agent (Nous Research) integration:** `rp-mcp` server
+(`rebel_profiler/llm/hermes_mcp.py`) operator tools ko MCP stdio tools ke
+rorup mein serve karta hai (`rp_*` prefix, ek case pinned). Agent config
+mein `mcp_servers:` entry ke baad hermes-agent `rp_system_status`,
+`rp_approval_list`, `rp_hunt_run`, `rp_probe_suggest` … natively call karta
+hai — har call wahi validation + broker gates + evidence law follow karti
+hai. Aur `RP_LLM__ENGINE=hermes` se Rebel Profiler ka apna hermes loop
+bhi asli hermes-agent binary ko brain ke tor par use kar sakta hai.
 
 ---
 *Generated live on hardware: case 394c8b4dd5a1, target www.hplovecraft.com

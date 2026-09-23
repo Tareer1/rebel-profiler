@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rebel Profiler — Hermes Console</title>
+<style>
+:root{
+  --bg-0:#0b0e14; --bg-1:#11151f; --bg-2:#1a2030; --border:#232b3d;
+  --text:#d7dce6; --text-dim:#7d8698; --accent:#00e5a0; --accent-2:#38bdf8;
+  --warn:#fbbf24; --danger:#f43f5e; --ok:#22c55e;
+  --font-ui:system-ui,-apple-system,"Segoe UI",sans-serif;
+  --font-mono:"JetBrains Mono","Fira Code",ui-monospace,Menlo,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg-0);color:var(--text);font-family:var(--font-ui);font-size:14px;
+  min-height:100vh;
+  background-image:repeating-linear-gradient(0deg,rgba(255,255,255,.012) 0 1px,transparent 1px 3px)}
+a{color:var(--accent-2);text-decoration:none}
+.layout{display:grid;grid-template-columns:52px 1fr;min-height:100vh}
+.rail{background:var(--bg-1);border-right:1px solid var(--border);display:flex;
+  flex-direction:column;align-items:center;padding:10px 0;gap:4px;position:sticky;top:0;height:100vh}
+.rail button{background:none;border:0;color:var(--text-dim);font-size:19px;width:40px;height:40px;
+  border-radius:9px;cursor:pointer}
+.rail button:hover{background:var(--bg-2);color:var(--text)}
+.rail button.on{background:var(--bg-2);color:var(--accent)}
+.rail .spacer{flex:1}
+.main{padding:18px 22px;max-width:1280px}
+.topbar{display:flex;align-items:center;gap:14px;margin-bottom:16px;flex-wrap:wrap}
+.topbar h1{font-family:var(--font-mono);font-size:15px;color:var(--accent);letter-spacing:.5px}
+.chip{font-family:var(--font-mono);font-size:12px;border:1px solid var(--border);
+  background:var(--bg-1);border-radius:999px;padding:4px 11px;color:var(--text-dim)}
+.chip b{color:var(--text);font-weight:600}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--text-dim);margin-right:6px}
+.dot.ok{background:var(--ok)} .dot.bad{background:var(--danger)} .dot.warn{background:var(--warn)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
+.panel{background:var(--bg-1);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:14px}
+.panel h2{font-size:12px;text-transform:uppercase;letter-spacing:1.2px;color:var(--text-dim);
+  font-family:var(--font-mono);margin-bottom:10px}
+.stat .n{font-family:var(--font-mono);font-size:26px;color:var(--accent)}
+.stat .l{font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px}
+.stat .n.mono{font-size:15px;color:var(--accent-2);word-break:break-all}
+table{width:100%;border-collapse:collapse;font-family:var(--font-mono);font-size:12.5px}
+th{color:var(--text-dim);text-align:left;font-weight:500;font-size:11px;text-transform:uppercase;
+  letter-spacing:.8px;padding:6px 8px;border-bottom:1px solid var(--border)}
+td{padding:6px 8px;border-bottom:1px solid rgba(35,43,61,.5);word-break:break-all}
+tr:hover td{background:var(--bg-2)}
+.pill{font-family:var(--font-mono);font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid}
+.pill.draft{color:var(--warn);border-color:var(--warn)}
+.pill.active{color:var(--accent);border-color:var(--accent)}
+.pill.closed{color:var(--text-dim);border-color:var(--border)}
+.btn{font-family:var(--font-mono);font-size:12.5px;background:var(--bg-2);color:var(--text);
+  border:1px solid var(--border);border-radius:8px;padding:7px 13px;cursor:pointer}
+.btn:hover{border-color:var(--accent-2)}
+.btn.primary{background:rgba(0,229,160,.12);color:var(--accent);border-color:rgba(0,229,160,.4)}
+.btn.danger{color:var(--danger);border-color:rgba(244,63,94,.4)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+input,select{background:var(--bg-2);border:1px solid var(--border);color:var(--text);
+  border-radius:8px;padding:7px 10px;font-family:var(--font-mono);font-size:12.5px;width:100%}
+input:focus,select:focus{outline:none;border-color:var(--accent-2)}
+label{font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;display:block;margin:8px 0 4px}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
+.row>div{flex:1;min-width:160px}
+.events{max-height:260px;overflow:auto;font-family:var(--font-mono);font-size:12px}
+.events .ev{padding:4px 6px;border-bottom:1px solid rgba(35,43,61,.4)}
+.events .t{color:var(--text-dim)} .events .sev-low{color:var(--text-dim)}
+.events .sev-medium{color:var(--accent-2)} .events .sev-high{color:var(--warn)}
+.events .sev-critical{color:var(--danger)}
+.mono{font-family:var(--font-mono)}
+.dim{color:var(--text-dim)}
+.ok{color:var(--ok)} .bad{color:var(--danger)} .warn{color:var(--warn)}
+.hidden{display:none}
+.screen{display:none} .screen.on{display:block}
+/* chat */
+#chatlog{display:flex;flex-direction:column;gap:10px;max-height:52vh;overflow:auto;padding:4px 2px}
+.msg{max-width:86%;padding:9px 12px;border-radius:10px;font-size:13.5px;line-height:1.5;white-space:pre-wrap}
+.msg.you{align-self:flex-end;background:rgba(56,189,248,.1);border:1px solid rgba(56,189,248,.3)}
+.msg.bot{align-self:flex-start;background:var(--bg-2);border:1px solid var(--border)}
+.msg .who{font-family:var(--font-mono);font-size:10.5px;color:var(--text-dim);display:block;margin-bottom:3px}
+#terminaL .ln{padding:1px 0}
+#terminal{background:#070a10;border:1px solid var(--border);border-radius:10px;padding:10px;
+  font-family:var(--font-mono);font-size:11.5px;max-height:260px;overflow:auto;color:#9fb0c8;white-space:pre-wrap}
+#chatinput{display:flex;gap:8px;margin-top:10px}
+#chatinput .pfx{font-family:var(--font-mono);color:var(--accent);align-self:center}
+.working{font-family:var(--font-mono);font-size:12px;color:var(--warn)}
+footer{margin-top:26px;color:var(--text-dim);font-size:11px;font-family:var(--font-mono)}
+.empty{color:var(--text-dim);font-style:italic;font-size:12.5px;padding:8px 2px}
+.confbar{display:inline-block;width:52px;height:6px;background:var(--bg-2);border-radius:4px;overflow:hidden;vertical-align:middle}
+.confbar i{display:block;height:100%;background:var(--accent)}
+/* surface graph */
+#sf-graph{background:#070a10;border:1px solid var(--border);border-radius:10px;margin-bottom:10px}
+#sf-graph .nlab{font-family:var(--font-mono);font-size:9.5px;fill:#9fb0c8}
+#sf-graph line{stroke:#2a3550;stroke-width:1.2}
+#sf-graph circle{cursor:pointer}
+/* audit chain */
+#aud-list{max-height:300px;overflow:auto;font-family:var(--font-mono);font-size:11.5px}
+.audrow{display:flex;align-items:center;gap:8px;padding:3px 4px;border-bottom:1px solid rgba(35,43,61,.4)}
+.audrow .seq{color:var(--text-dim);min-width:30px;text-align:right}
+.audrow .lnk{color:#31405f;font-weight:bold}
+.audrow .hash{color:var(--accent-2)}
+.audrow .act{color:var(--text)}
+.audrow .who{color:var(--text-dim)}
+/* approval queue */
+.appr{border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px;background:var(--bg-2)}
+.appr .tgt{font-family:var(--font-mono);font-size:11.5px;word-break:break-all;color:var(--accent-2)}
+.appr .meta{font-family:var(--font-mono);font-size:11px;color:var(--text-dim);margin:4px 0 8px}
+.appr.pill-pending{border-color:rgba(251,191,36,.45)}
+.tokenpop{position:relative}
+.tokenpop input{font-family:var(--font-mono)}
+@media(max-width:760px){.layout{grid-template-columns:1fr}.rail{flex-direction:row;height:auto;position:static;width:100%}.rail .spacer{display:none}}
+</style>
+</head>
+<body>
+<div class="layout">
+  <nav class="rail">
+    <button data-s="dashboard" class="on" title="Dashboard">◈</button>
+    <button data-s="cases" title="Cases">▤</button>
+    <button data-s="hermes" title="Hermes chat">❯</button>
+    <button data-s="dorks" title="Dorking">⌕</button>
+    <button data-s="surface" title="Surface">⬡</button>
+    <button data-s="approvals" title="Approval queue">✋</button>
+    <button data-s="bridge" title="Browser bridge">⇄</button>
+    <div class="spacer"></div>
+    <button data-s="settings" title="Settings">⚙</button>
+  </nav>
+  <main class="main">
+    <div class="topbar">
+      <h1>REBEL PROFILER · HERMES</h1>
+      <span class="chip" id="chip-case">◆ no case</span>
+      <span class="chip"><span class="dot" id="dot-audit"></span>audit <b id="audit-state">…</b></span>
+      <span class="chip"><span class="dot" id="dot-api"></span>gateway <b id="api-state">…</b></span>
+      <span class="chip"><span class="dot" id="dot-bridge"></span>bridge <b id="bridge-state">…</b></span>
+    </div>
+
+    <!-- DASHBOARD -->
+    <section class="screen on" id="s-dashboard">
+      <div class="grid">
+        <div class="panel stat"><div class="n" id="st-claims">–</div><div class="l">claims</div></div>
+        <div class="panel stat"><div class="n" id="st-evidence">–</div><div class="l">evidence</div></div>
+        <div class="panel stat"><div class="n mono" id="st-audit" title="click to copy">–</div><div class="l">audit head</div></div>
+        <div class="panel stat"><div class="n" id="st-findings">–</div><div class="l">findings</div></div>
+      </div>
+      <div class="panel"><h2>Live events</h2><div class="events" id="events"><div class="empty">no events</div></div></div>
+      <div class="panel"><h2>Quick actions</h2>
+        <div class="row">
+          <div><button class="btn primary" onclick="go('hermes')">Ask Hermes</button></div>
+          <div><button class="btn" onclick="go('cases')">New case</button></div>
+          <div><button class="btn" onclick="go('dorks')">Run dork</button></div>
+          <div><button class="btn" onclick="go('bridge')">Grab URL</button></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CASES -->
+    <section class="screen" id="s-cases">
+      <div class="panel"><h2>New case</h2>
+        <div class="row">
+          <div><label>Name</label><input id="nc-name" placeholder="Lab assessment"></div>
+          <div><label>Description</label><input id="nc-desc" placeholder="authorized test"></div>
+        </div>
+        <div class="row">
+          <div><label>Scope entry (wildcards ok: *.lab.test)</label><input id="nc-scope" placeholder="*.lab.example.test"></div>
+          <div style="max-width:130px"><label>&nbsp;</label><button class="btn primary" id="nc-go">create</button></div>
+        </div>
+        <p class="dim" style="font-size:11.5px;margin-top:8px">Scope enforcement goes live only when you activate the case — review the entry first.</p>
+      </div>
+      <div class="panel"><h2>Cases</h2><table id="case-table"><thead>
+        <tr><th>id</th><th>name</th><th>status</th><th></th></tr></thead><tbody></tbody></table>
+        <div class="empty hidden" id="cases-empty">no cases yet — create one above</div>
+      </div>
+    </section>
+
+    <!-- HERMES -->
+    <section class="screen" id="s-hermes">
+      <div class="panel">
+        <h2>Hermes chat <span class="dim">— local model, first turn can take minutes on CPU</span></h2>
+        <div id="chatlog"></div>
+        <div id="chatinput">
+          <span class="pfx">hermes❯</span>
+          <input id="hermes-goal" placeholder="map this domain · what's exposed? · generate the report" autocomplete="off">
+          <button class="btn primary" id="hermes-send">send</button>
+        </div>
+        <div class="working hidden" id="hermes-working">hermes is working… <span id="hermes-timer">0s</span></div>
+        <div class="row" style="margin-top:8px">
+          <div style="max-width:170px"><label>tier</label>
+            <select id="hermes-tier"><option value="">auto</option><option>tiny</option><option>low</option><option>mid</option><option>high</option></select></div>
+          <div style="max-width:220px"><label>case (optional)</label><input id="hermes-case" placeholder="newest active"></div>
+          <div style="max-width:150px;align-self:center;padding-top:14px">
+            <button class="btn" id="term-toggle">terminal view</button></div>
+        </div>
+        <div id="terminal" class="hidden" style="margin-top:10px"></div>
+      </div>
+    </section>
+
+    <!-- DORKS -->
+    <section class="screen" id="s-dorks">
+      <div class="panel"><h2>Dork console</h2>
+        <div class="row">
+          <div><label>Case</label><select id="dk-case"></select></div>
+          <div><label>Target</label><input id="dk-target" placeholder="example.test"></div>
+        </div>
+        <div class="row">
+          <div><label>Engine</label>
+            <select id="dk-engine">
+              <option value="dork_search|google">Google</option>
+              <option value="dork_search|duckduckgo">DuckDuckGo</option>
+              <option value="dork_search_tor|ahmia">Ahmia (Tor)</option>
+            </select></div>
+          <div><label>Dork</label>
+            <select id="dk-dork">
+              <option>site-files</option><option>open-directories</option>
+              <option>config-files</option><option>backup-files</option>
+              <option>login-portals</option><option>staging-sites</option>
+              <option>cloud-buckets</option><option>exposed-emails</option>
+              <option>tech-stack</option>
+            </select></div>
+          <div style="max-width:120px"><label>&nbsp;</label><button class="btn primary" id="dk-go">run</button></div>
+        </div>
+        <div id="dk-out" style="margin-top:12px"></div>
+      </div>
+    </section>
+
+    <!-- SURFACE -->
+    <section class="screen" id="s-surface">
+      <div class="panel"><h2>Surface graph</h2>
+        <div class="row">
+          <div style="max-width:130px"><label>&nbsp;</label><button class="btn primary" id="sf-go">load map</button></div>
+          <div style="max-width:170px"><label>&nbsp;</label><button class="btn" id="sf-build">rebuild from claims</button></div>
+        </div>
+        <div id="sf-out" style="margin-top:12px"></div>
+        <svg id="sf-graph" width="100%" height="340" class="hidden"></svg>
+      </div>
+    </section>
+
+    <!-- APPROVALS -->
+    <section class="screen" id="s-approvals">
+      <div class="panel"><h2>Approval queue <span class="dim">— high-risk actions wait here for YOU</span></h2>
+        <div class="row">
+          <div><label>Case</label><select id="ap-case"></select></div>
+          <div style="max-width:150px"><label>state</label>
+            <select id="ap-state"><option>pending</option><option>approved</option><option>denied</option><option value="all">all</option></select></div>
+          <div style="max-width:110px"><label>&nbsp;</label><button class="btn primary" id="ap-go">refresh</button></div>
+        </div>
+        <div id="ap-out" style="margin-top:12px"></div>
+        <p class="dim" style="font-size:11.5px;margin-top:8px">Approving runs the action through the broker's gates again and records the result as evidence — the same six gates as everywhere else.</p>
+      </div>
+    </section>
+
+    <!-- BRIDGE -->
+    <section class="screen" id="s-bridge">
+      <div class="panel"><h2>Browser bridge grab</h2>
+        <div class="row">
+          <div><label>Case</label><select id="bg-case"></select></div>
+          <div><label>URL (must be in scope)</label><input id="bg-url" placeholder="https://in.scope/"></div>
+        </div>
+        <div class="row">
+          <div style="max-width:120px"><label>&nbsp;</label><button class="btn primary" id="bg-go">submit job</button></div>
+        </div>
+        <div id="bg-out" style="margin-top:12px"></div>
+        <div class="tokenpop" style="margin-top:14px">
+          <label>bridge token (paste into the extension popup)</label>
+          <div class="row">
+            <div><input id="bg-token" type="password" placeholder="rp-…" autocomplete="off"></div>
+            <div style="max-width:200px;display:flex;gap:6px">
+              <button class="btn" id="bg-tok-show">reveal</button>
+              <button class="btn" id="bg-tok-copy">copy</button>
+            </div>
+          </div>
+          <p class="dim" style="font-size:11px;margin-top:6px">Read locally from the bridge token file via the proxy — never sent anywhere.</p>
+        </div>
+        <p class="dim" style="font-size:11.5px;margin-top:10px">
+          Requires the bridge running (<span class="mono">rp bridge</span>) and the extension loaded —
+          see docs/EXTENSION_SETUP.md.</p>
+      </div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section class="screen" id="s-settings">
+      <div class="panel"><h2>Connection</h2>
+        <p class="dim" style="font-size:12px">The proxy (frontend/proxy.py) talks to the read-only gateway on
+          <span class="mono">127.0.0.1</span> only. Start them:</p>
+        <pre class="mono" style="font-size:11.5px;color:var(--accent-2);margin-top:8px">rebel-profiler serve &lt;case-id&gt; --port 8899 --token SECRET
+python3 frontend/proxy.py --port 8898 --api-port 8899 --api-token SECRET</pre>
+      </div>
+      <div class="panel"><h2>Diagnostics</h2>
+        <table><tbody>
+          <tr><td>gateway</td><td id="dg-api">…</td></tr>
+          <tr><td>audit chain</td><td id="dg-audit">…</td></tr>
+          <tr><td>CLI binary</td><td id="dg-cli">…</td></tr>
+          <tr><td>browser bridge</td><td id="dg-bridge">…</td></tr>
+        </tbody></table>
+      </div>
+    </section>
+
+    <footer>the LLM proposes — the gates decide · local-only · every claim links hash-chained evidence</footer>
+  </main>
+</div>
+
+<script>
+"use strict";
+const $=s=>document.querySelector(s), $$=s=>document.querySelectorAll(s);
+const esc=t=>String(t??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmt=t=>new Date((t>1e12?t:t*1000)).toLocaleTimeString();
+async function api(path,opts){const r=await fetch(path,opts);
+  const j=await r.json().catch(()=>({})); return {code:r.status,...j};}
+async function cli(cmd,params={}){const r=await api("/api/cli",{method:"POST",
+  headers:{"Content-Type":"application/json"},body:JSON.stringify({cmd,params})});
+  return r.result ?? r;}
+
+/* ---------- navigation ---------- */
+function go(name){$$(".screen").forEach(s=>s.classList.remove("on"));
+  $("#s-"+name).classList.add("on");
+  $$(".rail button").forEach(b=>b.classList.toggle("on",b.dataset.s===name));
+  if(name==="cases") loadCases(); if(name==="approvals") loadApprovals(); if(name==="bridge") loadBridgeToken(); }
+$$(".rail button").forEach(b=>b.onclick=()=>go(b.dataset.s));
+
+/* ---------- state / events polling ---------- */
+let stateCache=null;
+async function refreshState(){
+  const s=await api("/api/state");
+  const ok=s.code===200;
+  $("#dot-api").className="dot "+(ok?"ok":"bad");
+  $("#api-state").textContent=ok?"up":"down";
+  if(ok){
+    stateCache=s;
+    $("#st-claims").textContent=s.claims??"0";
+    $("#st-evidence").textContent=s.evidence??"0";
+    const head=s.audit_head?String(s.audit_head):"";
+    const el=$("#st-audit"); el.textContent=head?head.slice(0,16)+"…":"–";
+    el.title=head; el.onclick=()=>head&&navigator.clipboard.writeText(head);
+    $("#chip-case").innerHTML="◆ <b>"+esc(s.case_id??"")+"</b>";
+    $("#dg-api").innerHTML='<span class="ok">✓ reachable</span>';
+    const av=await cli("audit_verify",{case:s.case_id});
+    const chainOk=av&&av.data?av.data.chain_ok:av&&av.chain_ok;
+    $("#dot-audit").className="dot "+(chainOk?"ok":"warn");
+    $("#audit-state").textContent=chainOk?"OK":"check";
+    $("#dg-audit").innerHTML=chainOk?'<span class="ok">✓ chain ok</span>'
+                                    :'<span class="warn">? verify manually</span>';
+  } else {
+    $("#dg-api").innerHTML='<span class="bad">✗ unreachable</span>';
+    $("#audit-state").textContent="—"; $("#dot-audit").className="dot";
+  }
+}
+async function refreshEvents(){
+  const e=await api("/api/events"); if(e.code!==200||!e.events){return;}
+  const box=$("#events");
+  box.innerHTML=e.events.map(ev=>{
+    const sev="sev-"+String(ev.severity||"low").toLowerCase();
+    return `<div class="ev"><span class="t">${esc(fmt(ev.created_at||ev.ts||Date.now()/1000))}</span> `
+      +`<span class="${sev}">●</span> ${esc(ev.type||"event")} `
+      +`<span class="dim">${esc(ev.detail||ev.summary||"")}</span></div>`;
+  }).join("")||'<div class="empty">no events</div>';
+}
+function refreshFindings(){ if(!stateCache) return;
+  cli("report",{case:stateCache.case_id}).then(r=>{
+    const data=r&&r.data?r.data:r;
+    const f=(data.findings&&data.findings.length)||0;
+    $("#st-findings").textContent=String(f);
+  }).catch(()=>{ $("#st-findings").textContent="?"; });
+}
+
+/* ---------- cases ---------- */
+async function loadCases(){
+  const r=await cli("case_list"); const list=(r&&r.data)||r||[];
+  const tbody=$("#case-table tbody"); tbody.innerHTML="";
+  const cases=Array.isArray(list)?list:[];
+  $("#cases-empty").classList.toggle("hidden",cases.length>0);
+  for(const c of cases){
+    const tr=document.createElement("tr");
+    tr.innerHTML=`<td>${esc(c.id)}</td><td>${esc(c.name)}</td>`
+      +`<td><span class="pill ${esc(c.status)}">${esc(c.status)}</span></td>`
+      +`<td>${c.status==="draft"?`<button class="btn" data-act="${esc(c.id)}">activate</button>`:""}</td>`;
+    tbody.appendChild(tr);
+  }
+  tbody.querySelectorAll("button[data-act]").forEach(b=>b.onclick=async()=>{
+    await cli("case_activate",{case:b.dataset.act}); loadCases(); refreshState();});  // fill dork/bridge/approval case selects
+  const selHtml=cases.map(c=>`<option>${esc(c.id)}</option>`).join("");
+  for(const id of ["dk-case","bg-case","ap-case"]) $("#"+id).innerHTML=selHtml||"";
+}
+$("#nc-go").onclick=async()=>{
+  const name=$("#nc-name").value.trim(), desc=$("#nc-desc").value.trim(),
+        scope=$("#nc-scope").value.trim();
+  if(!name) return;
+  const r=await cli("case_create",{text:name,text2:desc||"created via gui"});
+  const data=r&&r.data?r.data:r; const id=data.id||data.case_id||"";
+  if(id&&scope){ await cli("scope_add",{case:id,target:scope}); }
+  $("#nc-name").value="";$("#nc-desc").value="";$("#nc-scope").value="";
+  loadCases();
+};
+
+/* ---------- hermes ---------- */
+let busy=false,timerInt=null;
+function addMsg(cls,who,text){const d=document.createElement("div");d.className="msg "+cls;
+  d.innerHTML=`<span class="who">${esc(who)}</span>${esc(text)}`;
+  $("#chatlog").appendChild(d);$("#chatlog").scrollTop=1e9;return d;}
+function termLine(t){const box=$("#terminal");box.classList.remove("hidden");
+  const d=document.createElement("div");d.className="ln";d.textContent=t;
+  box.appendChild(d);box.scrollTop=1e9;}
+function startTimer(){const t0=Date.now();$("#hermes-working").classList.remove("hidden");
+  timerInt=setInterval(()=>$("#hermes-timer").textContent=
+    Math.round((Date.now()-t0)/1000)+"s",500);}
+function stopTimer(){clearInterval(timerInt);$("#hermes-working").classList.add("hidden");}
+function askHermes(){
+  if(busy) return; const goal=$("#hermes-goal").value.trim(); if(!goal) return;
+  busy=true;$("#hermes-send").disabled=true;$("#hermes-goal").value="";
+  addMsg("you","you>",goal);
+  const tier=$("#hermes-tier").value, cse=$("#hermes-case").value.trim();
+  const qs=new URLSearchParams({goal});
+  if(tier)qs.set("tier",tier); if(cse)qs.set("case",cse);
+  const es=new EventSource("/api/hermes/stream?"+qs.toString());
+  let answerBuf=[];
+  startTimer();
+  es.addEventListener("line",ev=>{
+    const line=JSON.parse(ev.data); termLine(line);
+    if(line.startsWith("hermes>")) answerBuf.push(line.replace(/^hermes>\s?/,""));
+  });
+  es.addEventListener("done",ev=>{
+    const d=JSON.parse(ev.data); es.close(); stopTimer();
+    const text=answerBuf.join("\n")||`(exit ${d.returncode}, ${d.elapsed_s}s — see terminal view)`;
+    addMsg("bot","hermes>",text);
+    answerBuf=[];busy=false;$("#hermes-send").disabled=false;
+  });
+  es.addEventListener("error",ev=>{
+    let d={};try{d=JSON.parse(ev.data)}catch(_){}
+    es.close(); stopTimer();
+    if(d.error) addMsg("bot","hermes>","✗ "+d.error+
+      (d.action?" — "+d.action:""));
+    else if(!answerBuf.length) addMsg("bot","hermes>","✗ stream ended");
+    answerBuf=[];busy=false;$("#hermes-send").disabled=false;
+  });
+}
+$("#hermes-send").onclick=askHermes;
+$("#hermes-goal").addEventListener("keydown",e=>{if(e.key==="Enter")askHermes();});
+$("#term-toggle").onclick=()=>$("#terminal").classList.toggle("hidden");
+
+/* ---------- dorks ---------- */
+$("#dk-go").onclick=async()=>{
+  const c=$("#dk-case").value, t=$("#dk-target").value.trim(),
+        [cmd,engine]=$("#dk-engine").value.split("|"), dork=$("#dk-dork").value;
+  if(!c||!t){$("#dk-out").innerHTML='<div class="empty">pick a case + target</div>';return;}
+  $("#dk-out").innerHTML='<div class="working">running dork…</div>';
+  const r=await cli(cmd,{case:c,target:t,text:engine,text2:dork});
+  const data=r&&r.data?r.data:r;
+  const claims=(data&&data.claims)||[];
+  $("#dk-out").innerHTML=(claims.length?
+    `<table><thead><tr><th>kind</th><th>value</th><th>conf</th></tr></thead><tbody>`
+    +claims.map(k=>`<tr><td>${esc(k.kind)}</td><td>${esc(k.value)}</td>`
+      +`<td><span class="confbar"><i style="width:${Math.round((k.confidence||0)*100)}%"></i></span></td></tr>`).join("")
+    +`</tbody></table>`
+    :'<div class="empty">engine returned no hits (that\'s data too)</div>')
+    +(r&&r.stderr?`<p class="warn mono" style="font-size:11px;margin-top:8px">${esc(r.stderr)}</p>`:"");
+  refreshState();
+};
+
+/* ---------- surface ---------- */
+function renderGraph(nodes, edges){
+  const svg=$("#sf-graph"); svg.classList.remove("hidden");
+  const W=svg.clientWidth||900, H=340, R=Math.min(W,H)/2-70;
+  const cx=W/2, cy=H/2, n=nodes.length;
+  const pos={};
+  nodes.forEach((nd,i)=>{
+    const a=(2*Math.PI*i)/Math.max(n,1)-Math.PI/2;
+    pos[nd.node||nd.id||nd.label]={x:cx+R*Math.cos(a),y:cy+R*Math.sin(a)*0.86};
+  });
+  const col=k=>k==="host"?"var(--accent)":k==="ip"?"var(--accent-2)":k==="port"?"var(--warn)":"#b48cff";
+  let html="";
+  for(const e of edges){
+    const a=pos[e.source||e.from], b=pos[e.target||e.to];
+    if(a&&b) html+=`<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}"></line>`;
+  }
+  nodes.forEach(nd=>{
+    const key=nd.node||nd.id||nd.label, p=pos[key]||{x:cx,y:cy};
+    const kind=nd.kind||nd.type||"node";
+    const label=String(nd.label||key).replace(/^https?:\/\//,"").slice(0,34);
+    html+=`<g class="nd" data-key="${esc(key)}">`
+      +`<circle cx="${p.x}" cy="${p.y}" r="6" fill="${col(kind)}"><title>${esc(nd.label||key)}</title></circle>`
+      +`<text class="nlab" x="${p.x+10}" y="${p.y+4}">${esc(label)}</text></g>`;
+  });
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`);
+  svg.innerHTML=html;
+}
+$("#sf-go").onclick=async()=>{
+  if(!stateCache){$("#sf-out").innerHTML='<div class="empty">gateway down — start `serve`</div>';return;}
+  const c=stateCache.case_id;
+  // build first so the persisted graph reflects the latest claims
+  await cli("surface_show",{case:c}).catch(()=>{});
+  const r=await cli("surface_show",{case:c});
+  const data=r&&r.data?r.data:r; const nodes=(data&&data.nodes)||[];
+  const edges=(data&&(data.edges||data.links))||[];
+  if(!nodes.length){
+    $("#sf-out").innerHTML='<div class="empty">empty graph — collect some data first (hunt_run / port-scan / crawl)</div>';
+    $("#sf-graph").classList.add("hidden");return;
+  }
+  $("#sf-out").innerHTML=`<p class="dim" style="margin-bottom:8px">${nodes.length} nodes · ${edges.length} edges — hover a node for the full id</p>`;
+  renderGraph(nodes,edges);
+};
+$("#sf-build").onclick=async()=>{
+  if(!stateCache) return;
+  await cli("audit_verify",{case:stateCache.case_id}).catch(()=>{});
+  // rebuild lives behind surface_show's data source: call it via the CLI template
+  const r=await api("/api/cli",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({cmd:"surface_build",params:{case:stateCache.case_id}})});
+  $("#sf-out").innerHTML=r&&r.result?`<p class="ok mono">rebuilt — ${esc(JSON.stringify(r.result).slice(0,160))}</p>`
+    :`<p class="bad mono">rebuild failed</p>`;
+  $("#sf-go").click();
+};
+
+/* ---------- approval queue ---------- */
+async function loadApprovals(){
+  const c=$("#ap-case").value||stateCache?.case_id; if(!c) return;
+  const st=$("#ap-state").value;
+  const r=await cli("approvals_list",{case:c});
+  const data=r&&r.data?r.data:r;
+  let rows=(data&&data.approvals)||[];
+  if(st!=="all") rows=rows.filter(a=>String(a.state||"")===st);
+  const box=$("#ap-out");
+  if(!rows.length){box.innerHTML='<div class="empty">queue clean — nothing waiting</div>';return;}
+  box.innerHTML="";
+  for(const a of rows){
+    const d=document.createElement("div");
+    d.className="appr pill-"+String(a.state||"pending");
+    const pending=String(a.state||"")==="pending";
+    d.innerHTML=`<div class="mono" style="color:var(--warn)">${esc(a.action||"?")} · risk ${esc(a.risk||"?")} · ${esc(a.state||"")}</div>`
+      +`<div class="tgt">${esc(a.target||"")}</div>`
+      +`<div class="meta">id ${esc(a.id)} · by ${esc(a.requested_by||"?")} · ${a.reasons?esc(JSON.stringify(a.reasons)):""}</div>`
+      +(pending?`<div style="display:flex;gap:8px">`
+        +`<button class="btn primary" data-dec="approve" data-id="${esc(a.id)}">approve + run</button>`
+        +`<button class="btn danger" data-dec="deny" data-id="${esc(a.id)}">deny</button></div>`:"");
+    box.appendChild(d);
+  }
+  box.querySelectorAll("button[data-dec]").forEach(b=>b.onclick=async()=>{
+    b.disabled=true;
+    const dec=b.dataset.dec, id=b.dataset.id;
+    const verb=dec==="approve"?"EXECUTE":"DENY";
+    if(!confirm(`${verb} ${id}?\n\nApprove = the action runs now through the broker gates and its result becomes evidence.`)) {b.disabled=false;return;}
+    const rr=await cli("approval_decide",{case:c,target:id,text:dec});
+    const rd=rr&&rr.data?rr.data:rr;
+    if(rd&&rd.execution){
+      const ex=rd.execution;
+      addMsg("bot","hermes-gui",`approval ${id} → ${dec}d; execution outcome: ${ex.outcome||ex.state||"?"}`);
+      go("hermes");
+    } else if(rd&&rd.error){
+      alert("decision failed: "+(rd.message||"?"));
+    }
+    loadApprovals(); refreshState();
+  });
+}
+$("#ap-go").onclick=loadApprovals;
+$("#ap-state").onchange=loadApprovals;
+
+/* ---------- audit chain visual ---------- */
+async function loadAuditVisual(){
+  if(!stateCache) return;
+  const r=await cli("audit_show",{case:stateCache.case_id}).catch(()=>null);
+  if(!r) return;
+  const rows=(r&&r.data?r.data:[]).slice(-24);
+  const el=document.createElement("div"); el.id="aud-list";
+  el.innerHTML=rows.map(e=>`<div class="audrow">`
+    +`<span class="seq">${esc(e.seq||"")}</span><span class="lnk">⛓</span>`
+    +`<span class="act">${esc(e.action||"")}</span>`
+    +`<span class="who">${esc(e.actor||"")} · ${esc(e.subject||"")}</span>`
+    +`<span class="hash" title="click to copy">${esc(e.hash||"")}</span></div>`).join("")
+    ||'<div class="empty">no audit events yet</div>';
+  const host=$("#s-dashboard .panel #aud-list");
+  if(host) host.replaceWith(el);
+  else { const p=document.createElement("div"); p.className="panel"; p.innerHTML="<h2>Audit chain (last 24)</h2>"; p.appendChild(el); $("#s-dashboard").appendChild(p); }
+  el.querySelectorAll(".hash").forEach(h=>h.onclick=()=>navigator.clipboard.writeText(h.title||h.textContent));
+}
+
+/* ---------- bridge token popup ---------- */
+async function loadBridgeToken(){
+  const r=await fetch("/api/bridge_status").then(x=>x.json()).catch(()=>({up:false}));
+  const dot=$("#dot-bridge");
+  if(dot){dot.className="dot "+(r.up?"ok":"bad");}
+  const dg=$("#dg-bridge");
+  if(dg) dg.innerHTML=r.up?'<span class="ok">✓ live (127.0.0.1:8765)</span>':'<span class="bad">✗ down — rp bridge</span>';
+  const bs=$("#bridge-state"); if(bs) bs.textContent=r.up?"live":"down";
+  const t=await fetch("/api/bridge_token").then(x=>x.json()).catch(()=>({}));
+  const inp=$("#bg-token");
+  if(inp&&t.token) inp.value=t.token;
+}
+$("#bg-tok-show").onclick=()=>{const i=$("#bg-token"); i.type=i.type==="password"?"text":"password";};
+$("#bg-tok-copy").onclick=()=>{const i=$("#bg-token"); if(i.value) navigator.clipboard.writeText(i.value);};
+
+/* ---------- bridge ---------- */
+$("#bg-go").onclick=async()=>{
+  const c=$("#bg-case").value, u=$("#bg-url").value.trim();
+  if(!c||!u){$("#bg-out").innerHTML='<div class="empty">pick a case + url</div>';return;}
+  $("#bg-out").innerHTML='<div class="working">job submitted — poll with `rp job <id>` or the CLI…</div>';
+  const r=await cli("browser_submit",{case:c,target:u});
+  const data=r&&r.data?r.data:r;
+  const job=data&&(data.job_id||data.id)||"";
+  $("#bg-out").innerHTML=job
+    ?`<p>job <span class="mono" style="color:var(--accent-2)">${esc(job)}</span> queued — the extension picks it up within ~30s.</p>`
+    :`<p class="bad mono">${esc(r.stderr||"submit failed (bridge running? extension loaded?)")}</p>`;
+};
+
+/* ---------- boot ---------- */
+refreshState(); refreshEvents(); loadCases(); loadApprovals(); loadAuditVisual(); loadBridgeToken();
+setInterval(refreshState,5000); setInterval(refreshEvents,5000); setInterval(loadApprovals,15000);
+</script>
+</body>
+</html>

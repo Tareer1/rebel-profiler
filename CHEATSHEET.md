@@ -59,6 +59,25 @@ rebel-profiler --config-file hermes.toml hermes "..."   # pinned local GGUF
 rebel-profiler hermes --case <case-id> "..."            # explicit case (optional)
 ```
 
+## 0c. The GUI — browser console over the same gates
+
+`frontend/` ships a local-only web console (dark Hermes aesthetic) over the
+read-only gateway and the whitelisted JSON CLI. Two processes, both on
+127.0.0.1:
+
+```bash
+rebel-profiler serve <case-id> --port 8899 --token SECRET   # read-only API
+python3 frontend/proxy.py --port 8898 --api-port 8899 --api-token SECRET
+# then open http://127.0.0.1:8898
+```
+
+Dashboard (live claims/evidence/audit-head + events feed) · case create →
+scope add → activate · Hermes chat with an honest elapsed timer (no fake
+progress bars — first turn on CPU takes minutes) · dork console · surface
+map · browser-bridge grab. Writes go through `frontend/proxy.py`'s CLI
+whitelist only — every command still passes the broker's six gates; the
+browser never touches anything else. Tests: `tests/test_gui_proxy.py`.
+
 In the shell (cloned from the Hermes agent CLI — banner, registry-owned
 slash commands): `/help [filter]` `/status` `/model [name]` `/new [name]`
 `/case` `/tools [filter]` `/scope` `/clear` `/exit`. Plain language runs
@@ -162,6 +181,20 @@ needs `--tier high`.
 ```bash
 rebel-profiler hermes --tier high          # widen the budget for a 7B-class Q4
 rebel-profiler hermes --llm /path/model.gguf   # pin one exact checkpoint
+
+# The REAL hermes-agent (Nous Research) as the brain — two ways:
+RP_LLM__ENGINE=hermes rebel-profiler hermes "map the scope"   # engine mode (safe toolset child)
+#   or the supported MCP direction: the agent calls rp_* tools natively —
+#   ~/.hermes/config.yaml →
+#   mcp_servers:
+#     rebel-profiler:
+#       command: <repo>/.venv/bin/rp-mcp
+#       args: ["--case", "<case-id>"]
+rp-mcp --case <case-id>                    # run the MCP server by hand (stdio JSON-RPC)
+
+# Approvals inside chat — the model shows the queue, YOU decide:
+#   "check approval_list"  →  "approve apr_… " (explicit)  →  executed + claims ingested
+rebel-profiler approval list <case-id>      # the same queue from the shell
 ```
 
 CPU reality check: local prefill runs at a few tokens/second on laptop CPUs,

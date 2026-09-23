@@ -483,6 +483,58 @@ def _parse_wayback(stdout: str, subject: str) -> list[tuple[str, str]]:
     return pairs
 
 
+def _parse_httpx_json(stdout: str) -> list[tuple[str, str]]:
+    """httpx -json: one JSON object per live host (newline-delimited).
+
+    Extracts the bounty-relevant head: status code, page title, detected
+    technologies and the resolved IP. A malformed line is skipped, never
+    guessed — the rest of the batch still parses.
+    """
+    pairs: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict):
+            continue
+        host = str(row.get("host") or row.get("url") or "").strip()
+        if not host:
+            continue
+        status = row.get("status_code")
+        if status:
+            key = ("httpx_status", f"{host}:{status}")
+            if key not in seen:
+                seen.add(key)
+                pairs.append(("httpx_status", f"{host}:{status}"))
+        title = str(row.get("title") or "").strip()
+        if title:
+            key = ("httpx_title", title[:200])
+            if key not in seen:
+                seen.add(key)
+                pairs.append(("httpx_title", title[:200]))
+        for tech in (row.get("technologies") or []):
+            name = str(tech if isinstance(tech, str) else tech.get("name", "")).strip()
+            if name:
+                key = ("httpx_tech", name[:120])
+                if key not in seen:
+                    seen.add(key)
+                    pairs.append(("httpx_tech", name[:120]))
+        ip = str(row.get("ip") or "").strip()
+        if ip:
+            key = ("ip", ip)
+            if key not in seen:
+                seen.add(key)
+                pairs.append(("ip", ip))
+        if len(pairs) >= 200:
+            break
+    return pairs
+
+
 def _parse_probe(stdout: str) -> list[tuple[str, str]]:
     """probe: parse the response head — status line + selected headers."""
     pairs: list[tuple[str, str]] = []
@@ -663,6 +715,13 @@ class CollectionPipeline:
             pairs = _parse_js_intel(stdout)
         elif effective_action == "wayback-urls":
             pairs = _parse_wayback(stdout, subject)
+        elif effective_action in {"known-urls", "katana-crawl"}:
+            # gau / katana emit raw URL lines — the same in-scope filter the
+            # wayback parser applies, so out-of-scope archive noise never
+            # becomes a claim.
+            pairs = _parse_wayback(stdout, subject)
+        elif effective_action == "httpx-probe":
+            pairs = _parse_httpx_json(stdout)
         elif effective_action == "probe":
             pairs = _parse_probe(stdout)
         else:
@@ -733,6 +792,10 @@ class CollectionPipeline:
             "waf-detect": "scan.web",
             "js-intel": "js.static",
             "wayback-urls": "archive.wayback",
+            "known-urls": "archive.wayback",
+            "katana-crawl": "scan.web",
+            "httpx-probe": "scan.web",
+            "param-hunt": "scan.web",
             "probe": "scan.web",
         }.get(action, "unknown")
 

@@ -697,4 +697,104 @@ def _probe_execute(ctx, db, case_id, args, scope_engine=None):
                 "note": "no such approval — check the queue listing"}
     result = ctx.broker(db).execute_approved(
         approval_id, decided_by=ctx.actor)
-    return result.as_dict()
+    payload = result.as_dict()
+    payload["claims"] = _ingest_result_claims(ctx, db, case_id, result)
+    return payload
+
+
+def _ingest_result_claims(ctx, db, case_id: str, result) -> list:
+    """Parse one succeeded broker result into claims (the collect pipeline).
+
+    Execution alone stops at evidence; the endpoint is the claim ledger.
+    Failure-tolerant by design: a parser miss degrades to an empty list and
+    the evidence stays registered regardless.
+    """
+    if getattr(result, "outcome", "") != "succeeded":
+        return []
+    try:
+        from ..intel.claims import ClaimLedger
+        from ..intel.collection import CollectionPipeline
+        from ..intel.sources import SourceRegistry
+
+        pipeline = CollectionPipeline(
+            ClaimLedger(SourceRegistry()),
+            ctx.evidence_store(db, case_id),
+            ctx.broker(db).adapters, db=db,
+        )
+        collection = pipeline.ingest(
+            case_id, action=result.action, target=result.target,
+            stdout=result.stdout, stderr=result.stderr,
+            returncode=result.returncode or 1, task_id=result.task_id,
+            evidence_id=result.evidence_id, params={},
+        )
+        return collection.get("claims", [])
+    except Exception:
+        return []
+
+
+@operator_tool(
+    "approval_list",
+    "List this case's approval-queue entries (pending/approved/denied). "
+    "Pending high-risk actions (e.g. probe) wait here for the operator; "
+    "report them and ask whether to continue or move on — never decide "
+    "for the operator.",
+    parameters={"state": "optional filter: pending (default), approved, denied, or all"},
+)
+def _approval_list(ctx, db, case_id, args, scope_engine=None):
+    from ..security.approvals import ApprovalQueue
+
+    state = str(args.get("state", "")).strip().lower() or "pending"
+    if state not in {"pending", "approved", "denied", "cancelled", "all"}:
+        state = "pending"
+    rows = ApprovalQueue(db).list(case_id, None if state == "all" else state)
+    return {"case": case_id, "state": state, "count": len(rows),
+            "approvals": [dict(r) for r in rows],
+            "next": ("pending entries await the OPERATOR's decision — summarize "
+                     "them and ask whether to keep waiting, work something else, "
+                     "or wrap up; an approval is granted via the CLI 'approval "
+                     "decide' (or the GUI), never by the model")}
+
+
+@operator_tool(
+    "approval_decide",
+    "Record the OPERATOR's decision on one approval and, when approved, "
+    "execute the action now (approve+run to the evidence endpoint in one "
+    "step). Only call this AFTER the operator explicitly chose approve or "
+    "deny in the conversation; the model must never decide by itself.",
+    parameters={"approval_id": "id from approval_list",
+                "decision": "the operator's explicit choice: approve or deny"},
+    required=("approval_id", "decision"),
+)
+def _approval_decide(ctx, db, case_id, args, scope_engine=None):
+    from ..core.errors import UsageError
+    from ..security.approvals import ApprovalQueue
+
+    approval_id = str(args["approval_id"]).strip()
+    decision = str(args["decision"]).strip().lower()
+    if decision not in {"approve", "deny"}:
+        raise UsageError(
+            f"decision '{decision}' is not approve/deny",
+            reason="the model must never manufacture the operator's decision",
+            action="Ask the operator for an explicit approve or deny.")
+    queue = ApprovalQueue(db)
+    try:
+        rec = queue.get(approval_id)
+    except UsageError as exc:
+        raise UsageError(
+            f"no approval '{approval_id}' in this case",
+            action="List the queue with approval_list first.") from exc
+    decided = queue.decide(approval_id, decision, decided_by=ctx.actor)
+    payload = {"approval_id": approval_id, "decision": decision,
+               "state": decided.get("state", decision + "d"),
+               "action": decided.get("action", ""),
+               "target": decided.get("target", "")}
+    if decision != "approve":
+        payload["next"] = ("denied — nothing executes; the audit trail "
+                           "records the denial")
+        return payload
+    result = ctx.broker(db).execute_approved(approval_id, decided_by=ctx.actor)
+    payload["execution"] = result.as_dict()
+    payload["claims"] = _ingest_result_claims(ctx, db, case_id, result)
+    payload["next"] = ("executed — claims and evidence are in the ledger; "
+                       "read them with claims_list")
+    return payload

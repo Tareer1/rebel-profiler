@@ -11,10 +11,16 @@ Two engines, one interface:
   CUDA/MPS at all) tensors are placed on CPU; Apple-silicon machines get MPS
   placement automatically.
 
-* :class:`TinyLlmEngine` — a deterministic, stdlib-only fallback that keeps
+    * :class:`TinyLlmEngine` — a deterministic, stdlib-only fallback that keeps
   every downstream contract (planner → proposals, daemon results, CLI exit
   codes) alive on machines that cannot or may not load weights. It never
   hallucinates: it echoes bounded, labeled text and proposes nothing.
+
+* :class:`HermesAgentEngine` (``hermes_agent.py``) — the operator's installed
+  Nous Research hermes-agent CLI as an agent-grade brain: the child runs
+  with the ``safe`` toolset only (no terminal, no file tools), so the
+  no-raw-shell law holds mechanically. Selected by pinning
+  ``RP_LLM__ENGINE=hermes``; never a silent default.
 
 :class:`ModelPlane` owns the lifecycle: exactly one engine loaded at a time,
 eager unload (``del`` + gc + optional torch CUDA cache flush), RSS check
@@ -412,6 +418,15 @@ class ModelPlane:
             self._engine_kind = "external"
             self._fallback_reason = "engine=external requested (remote AI provider)"
             return engine
+        if self._prefer == "hermes":
+            # The operator's installed hermes-agent (Nous Research) as the
+            # brain: agent-grade reasoning, safe toolset, still gated here.
+            engine = self._engine_for("hermes", model, **options)
+            engine.load()
+            self._engine = engine
+            self._engine_kind = "hermes"
+            self._fallback_reason = "engine=hermes requested (installed hermes-agent)"
+            return engine
         if self._prefer == "gguf":
             # Explicit GGUF pin: the caller knows the checkpoint is a gguf.
             engine = self._engine_for("gguf", model, **options)
@@ -555,6 +570,12 @@ class ModelPlane:
             engine = ExternalEngine(model, limits=self.limits,
                                     **{k: v for k, v in options.items()
                                        if k in {"api_key", "api_base", "timeout_s"}})
+        elif kind == "hermes":
+            from .hermes_agent import HermesAgentEngine
+
+            engine = HermesAgentEngine(model, limits=self.limits,
+                                       **{k: v for k, v in options.items()
+                                          if k in {"bin_path", "timeout_s", "toolsets"}})
         elif kind == "native":
             from .native import NativeStreamingEngine
 
@@ -579,7 +600,7 @@ class ModelPlane:
                 "No engine loaded",
                 action="Call select_engine() or load_tiny() first.",
             )
-        if self._engine_kind == "airllm":
+        if self._engine_kind in {"airllm", "hermes"}:
             self._engine.guard.check_rss()
         return self._engine.generate(prompt, **kwargs)
 

@@ -1,5 +1,10 @@
 # Rebel Profiler — GUI Build Brief (paste this whole file into ChatGPT)
 
+> **STATUS UPDATE:** `frontend/` now ships in-repo (`proxy.py` + `index.html`,
+> tests in `tests/test_gui_proxy.py`). Sections 4–6 describe the implemented
+> contract; the remaining polish items (Cytoscape graph, token popup, audit
+> visual) are what's left of this brief.
+
 > **How to use:** Paste this entire document into ChatGPT (or any capable AI)
 > and ask it to build the frontend. It contains everything: product context,
 > the exact backend API, every screen's spec, and the visual design system

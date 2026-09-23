@@ -21,6 +21,13 @@ GGUF_WHEEL_CUDA = "https://abetlen.github.io/llama-cpp-python/whl/cu121"
 TORCH_WHEEL_CPU = "https://download.pytorch.org/whl/cpu"
 
 
+def _installed_hermes_agent() -> bool:
+    """Is the Nous Research hermes-agent CLI available on this machine?"""
+    from .hermes_agent import resolve_hermes_agent_bin
+
+    return bool(resolve_hermes_agent_bin())
+
+
 def _installed(module: str) -> bool:
     try:
         return importlib.util.find_spec(module) is not None
@@ -185,6 +192,19 @@ def engine_table() -> list[dict]:
             "install": "export RP_LLM__ENGINE=external RP_LLM__API_KEY=sk-... "
                        "[RP_LLM__API_BASE=https://host/v1]",
             "run": "RP_LLM__ENGINE=external rebel-profiler llm generate \"<prompt>\"",
+        },
+        {
+            "engine": "hermes",
+            "installed": _installed_hermes_agent(),
+            "needs": "the Nous Research hermes-agent CLI ('hermes' on PATH or "
+                     "RP_HERMES_BIN set)",
+            "purpose": "The REAL Hermes agent as this tool's brain: agent-grade "
+                       "reasoning that stays on this machine. The child runs with "
+                       "the safe toolset only (no terminal, no file tools), so the "
+                       "six gates still decide everything.",
+            "install": "install the hermes-agent CLI (github.com/NousResearch/"
+                       "hermes-agent) or set RP_HERMES_BIN=/path/to/hermes",
+            "run": "RP_LLM__ENGINE=hermes rebel-profiler hermes \"map the scope\"",
         },
     ]
 

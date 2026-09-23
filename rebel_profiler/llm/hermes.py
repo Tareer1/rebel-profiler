@@ -90,22 +90,33 @@ def _case_context(case_id: str, db) -> str:
     """
     lines = [f"CONTEXT: current case id = {case_id}"]
     try:
-        row = db.get_case(case_id)
-        if row is not None:
-            lines[0] = (f"CONTEXT: current case = {case_id} "
-                        f"[{row['status']}] — {row.get('name', '')}")
-            entries = [dict(e) for e in db.scope_entries(case_id)]
-            scope_vals = ", ".join(
-                str(e.get("value", "")) for e in entries[:12]) or "(none)"
-            lines.append(
-                f"Authorized scope: {scope_vals}. Claims in ledger: "
-                f"{len(db.claims_for(case_id, None))}.")
             lines.append(
                 "Hunting workflow: hunt_run (seed URL) → hunt_triage → "
                 "probe_suggest (approval-gated). Prefer passive tools first.")
+            if str(row["status"]).lower() == "active":
+                lines.append(
+                    "Pending work: check approval_list for queued high-risk "
+                    "actions; the operator decides them with approval_decide.")
     except Exception:
         pass
     return "\n".join(lines)
+
+
+def case_goal_hint(goal: str) -> str:
+    """Strip a leading bare case-id from a hermes goal line.
+
+    ``rebel-profiler hermes <id> "goal"`` is natural to type, but the CLI
+    consumes every positional word as the goal — so the id would ride along
+    and the model would answer questions about "case 66bb…" instead of
+    working THE case. A leading bare id (hex-ish slug) is removed; the
+    ``--case`` flag remains the explicit way to pin one.
+    """
+    import re
+
+    m = re.match(r"^([0-9a-fA-F]{6,20})\s+(.+)$", goal.strip(), re.DOTALL)
+    if m:
+        return m.group(2).strip()
+    return goal.strip()
 
 
 def tool_schema(registry) -> list[dict]:
@@ -420,7 +431,7 @@ class HermesAgentLoop:
                  registry=None, ctx=None,
                  history: list[dict] | None = None) -> None:
         self.case_id = case_id
-        self.goal = redact(str(goal))[:GOAL_MAX_CHARS]
+        self.goal = redact(case_goal_hint(str(goal)))[:GOAL_MAX_CHARS]
         # REPL continuity: the caller owns one conversation list per shell
         # session; every turn reads the tail and appends its exchange back.
         self.history = list(history) if history else []

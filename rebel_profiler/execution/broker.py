@@ -213,8 +213,10 @@ def _default_adapter_classes() -> tuple[type[Adapter], ...]:
     classes: list[type[Adapter]] = list(BUILTIN_ADAPTERS)
     try:
         from .adapters import EXTENDED_ADAPTERS
+        from .hunters import HUNTER_ADAPTERS
 
         classes.extend(EXTENDED_ADAPTERS)
+        classes.extend(HUNTER_ADAPTERS)
     except ImportError:  # pragma: no cover - extended set is stdlib-only
         pass
     try:

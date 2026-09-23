@@ -528,7 +528,7 @@ class TestSetup:
 
         plan = setup_plan(limits=DEFAULT_LIMITS["mid"])
         engines = {e["engine"] for e in plan["engines"]}
-        assert engines == {"tiny", "gguf", "native", "airllm", "external"}
+        assert engines == {"tiny", "gguf", "native", "airllm", "external", "hermes"}
         gguf = next(e for e in plan["engines"] if e["engine"] == "gguf")
         assert "llama-cpp-python" in gguf["install"]
         assert "abetlen.github.io" in gguf["install"]

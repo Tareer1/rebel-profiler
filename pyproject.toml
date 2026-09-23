@@ -25,6 +25,7 @@ native = ["torch"]
 
 [project.scripts]
 rebel-profiler = "rebel_profiler.cli.main:main"
+rp-mcp = "rebel_profiler.llm.hermes_mcp:main"
 
 [tool.setuptools.packages.find]
 include = ["rebel_profiler*"]
