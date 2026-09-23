@@ -180,3 +180,37 @@ class TestBountyHuntGate:
         combined = (captured.out + captured.err).lower()
         assert "credential" in combined
         assert "h1_api_username" in combined or "credential store" in combined
+
+    def test_hunt_with_stored_scope_skips_credential_gate(self, tmp_path,
+                                                          monkeypatch, capsys):
+        # A case whose scope is already in the ledger carries its
+        # authorization on disk — `bounty hunt --case <id>` must run from
+        # that stored scope without demanding H1 credentials (a fresh case
+        # still fails closed; that contract is the test above).
+        from rebel_profiler.cli.main import main
+
+        monkeypatch.setenv("H1_API_USERNAME", "")
+        monkeypatch.setenv("H1_API_TOKEN", "")
+        monkeypatch.setenv("RP_MASTER_SECRET", "test-secret")
+        monkeypatch.chdir(tmp_path)
+        assert main(["case", "create", "Stored scope case", "--data-dir",
+                     str(tmp_path)]) == 0
+        listing = capsys.readouterr()
+        assert main(["case", "list", "-o", "json", "--data-dir",
+                     str(tmp_path)]) == 0
+        import json as _json
+
+        cases = _json.loads(capsys.readouterr().out)
+        rows = cases if isinstance(cases, list) else cases.get("data", cases)
+        case_id = rows[0]["id"]
+        assert main(["case", "scope", "add", case_id, "*.lab.example.test",
+                     "--note", "imported scope", "--data-dir",
+                     str(tmp_path)]) == 0
+        assert main(["bounty", "hunt", "examplecorp", "--case", case_id,
+                     "--no-author", "--max-assets", "1", "--max-pages", "1",
+                     "--data-dir", str(tmp_path)]) in (0, 1)
+        # the run got past the credential gate (any terminal state is fine;
+        # a credential error is not)
+        captured = capsys.readouterr()
+        combined = (captured.out + captured.err).lower()
+        assert "no hackerone api credentials" not in combined

@@ -2584,27 +2584,51 @@ def _cmd_bounty_hunt(ctx: AppContext, args: argparse.Namespace) -> int:
                   + (f" — {detail}" if detail else ""), file=sys.stderr)
 
     # Stage 0: credentials BEFORE any case mutation — fail closed, early.
+    # Exception: a reused case whose scope is already in the ledger is an
+    # authorization fact on disk (imported via `bounty import`/`fetch` or
+    # scope-added by the operator) — re-fetching adds nothing, so the run
+    # proceeds from the stored scope and the H1 gate simply doesn't apply.
+    # A FRESH case has no such fact, so without credentials it fails closed.
     probe_case = ctx.find_case(args.case_id) if args.case_id else None
-    db0 = ctx.open_case(probe_case["id"]) if probe_case else None
-    try:
-        creds = _h1_credentials(ctx, db0, probe_case["id"] if probe_case else "",
-                                args) if db0 is not None else None
-        if creds is None:
-            # fall back to env-only check so the error names the real blocker
-            import os
-
-            if not (os.environ.get("H1_API_USERNAME") and os.environ.get("H1_API_TOKEN")):
-                raise UsageError(
-                    "No HackerOne API credentials found",
-                    reason="bounty hunt fetches the live program scope; without "
-                           "credentials it cannot know what is authorized.",
-                    action="Store them once in any case: rebel-profiler credential "
-                           "store <case-id> hackerone-api-identity --scope bounty-fetch "
-                           "…, or export H1_API_USERNAME / H1_API_TOKEN.",
-                )
-    finally:
-        if db0 is not None:
+    have_stored_scope = False
+    if probe_case is not None:
+        db0 = ctx.open_case(probe_case["id"])
+        try:
+            have_stored_scope = bool(db0.scope_entries(probe_case["id"]))
+            if not have_stored_scope:
+                creds = _h1_credentials(ctx, db0, probe_case["id"], args)
+                if creds is None and not (
+                        os.environ.get("H1_API_USERNAME")
+                        and os.environ.get("H1_API_TOKEN")):
+                    raise UsageError(
+                        "No HackerOne API credentials found",
+                        reason="bounty hunt fetches the live program scope; "
+                               "without credentials it cannot know what is "
+                               "authorized.",
+                        action="Store them once in any case: rebel-profiler "
+                               "credential store <case-id> hackerone-api-identity "
+                               "--scope bounty-fetch …, or export H1_API_USERNAME / "
+                               "H1_API_TOKEN. (A case that already has scope "
+                               "entries skips the fetch entirely.)",
+                    )
+        finally:
             db0.close()
+    else:
+        # fresh case: no stored authorization fact exists yet, so the fetch
+        # is unavoidable and the credential gate applies right here, before
+        # any case is created.
+        has_flag_creds = (str(getattr(args, "api_identity", "") or "").strip()
+                          and str(getattr(args, "api_token", "") or "").strip())
+        if not has_flag_creds and not (os.environ.get("H1_API_USERNAME")
+                                       and os.environ.get("H1_API_TOKEN")):
+            raise UsageError(
+                "No HackerOne API credentials found",
+                reason="bounty hunt fetches the live program scope; without "
+                       "credentials it cannot know what is authorized.",
+                action="Store them once in any case: rebel-profiler credential "
+                       "store <case-id> hackerone-api-identity --scope bounty-fetch "
+                       "…, or export H1_API_USERNAME / H1_API_TOKEN.",
+            )
 
     # Stage 1: case — fresh or reused
     if args.case_id:
@@ -2620,17 +2644,35 @@ def _cmd_bounty_hunt(ctx: AppContext, args: argparse.Namespace) -> int:
 
     db = ctx.open_case(rec["id"])
     try:
-        from ..intel.h1_fetch import fetch_program_document
+        if have_stored_scope:
+            # Authorization already on file for this case — skip the fetch
+            # (and the credential requirement with it) and run from the
+            # stored scope.
+            _stage({"stage": "scope", "status": "ok",
+                    "detail": "reusing the case's stored scope (fetch skipped)"})
+            ctx.set_case_status(rec["id"], "active")
+            rec = ctx.find_case(rec["id"])
+        else:
+            from ..intel.h1_fetch import fetch_program_document
 
-        identity, token = creds
-        try:
-            doc = fetch_program_document(args.handle, identity, token)
-        except (RuntimeError, ValueError) as exc:
-            raise UsageError(
-                f"HackerOne fetch failed: {exc}",
-                action="Check the program handle and API credentials.") from exc
-        _import_scope_document(ctx, db, rec, doc, args.handle, activate=True)
-        rec = ctx.find_case(rec["id"])   # refresh status after activation
+            if creds is None:   # reuse without stored scope and no creds
+                raise UsageError(
+                    "No HackerOne API credentials found",
+                    reason="this case has no stored scope, so bounty hunt must "
+                           "fetch the live program scope to authorize targets.",
+                    action="Store credentials: rebel-profiler credential store "
+                           "<case-id> hackerone-api-identity --scope bounty-fetch "
+                           "…, or export H1_API_USERNAME / H1_API_TOKEN.",
+                )
+            identity, token = creds
+            try:
+                doc = fetch_program_document(args.handle, identity, token)
+            except (RuntimeError, ValueError) as exc:
+                raise UsageError(
+                    f"HackerOne fetch failed: {exc}",
+                    action="Check the program handle and API credentials.") from exc
+            _import_scope_document(ctx, db, rec, doc, args.handle, activate=True)
+            rec = ctx.find_case(rec["id"])   # refresh status after activation
 
         session = BountySession(
             rec["id"],
