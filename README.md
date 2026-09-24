@@ -168,7 +168,7 @@ rebel-profiler shell
 > env var and exit code on one page. Recurring jobs can pin model/tier/
 > actor settings once with `--config-file job.toml` (precedence: tier
 > defaults < profile < `RP_LLM__*` env < explicit `--tier` flag).
-> Release history: [v1.4.0](RELEASE_NOTES_v1.4.0.md) · [v1.3.1](RELEASE_NOTES_v1.3.1.md)
+> Release history: [v1.5.0](RELEASE_NOTES_v1.5.0.md) · [v1.4.0](RELEASE_NOTES_v1.4.0.md) · [v1.3.1](RELEASE_NOTES_v1.3.1.md)
 > · [v1.3.0](RELEASE_NOTES_v1.3.0.md) · [v1.2.0](RELEASE_NOTES_v1.2.0.md) · [v1.1.0](RELEASE_NOTES_v1.1.0.md)
 
 ### AirLLM-mode: heavy LLMs on low-end hardware
