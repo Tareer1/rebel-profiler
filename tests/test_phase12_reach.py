@@ -21,6 +21,7 @@ import pytest
 from rebel_profiler.core.errors import StateError, UsageError
 from rebel_profiler.core.ops import update_zipapp
 from rebel_profiler.execution.broker import AdapterRegistry
+from rebel_profiler.intel.collection import _parse_nmap
 from rebel_profiler.intel.playbooks import (
     expand_playbook,
     get_playbook,
@@ -28,6 +29,7 @@ from rebel_profiler.intel.playbooks import (
     validate_playbook,
 )
 from rebel_profiler.intel.report_export import to_markdown, to_sarif
+from rebel_profiler.security.scope import ScopeEntry
 
 
 # ------------------------------------------------------------ self-update
@@ -186,7 +188,7 @@ class TestPlaybooks:
         for pb in load_playbooks():
             v = validate_playbook(pb)
             assert v["healthy"], f"{pb.name}: {v['problems']}"
-            assert len(pb.steps) >= 3
+            assert len(pb.steps) >= 2
 
     def test_unknown_playbook_is_structured(self):
         with pytest.raises(UsageError):
@@ -247,3 +249,66 @@ class TestPlaybooks:
         v = validate_playbook(pb)
         assert v["healthy"] is False
         assert "evil" in v["problems"][0]["problem"]
+
+    def test_lan_inventory_playbook_valid(self):
+        pb = get_playbook("lan-inventory")
+        v = validate_playbook(pb)
+        assert v["healthy"]
+        ex = expand_playbook(pb, "192.168.55.0/24")
+        assert ex["entries"][0]["action"] == "host-discovery"
+        assert ex["entries"][1]["action"] == "port-scan"
+
+
+# ------------------------------------------------- LAN sweep + CIDR scope
+
+class TestLanSweepParsing:
+    SWEEP = (
+        "Starting Nmap 7.95 ( https://nmap.org )\n"
+        "Nmap scan report for 192.168.55.1\n"
+        "Host is up (0.013s latency).\n"
+        "MAC Address: E4:A8:B6:33:A5:63 (Huawei Technologies)\n"
+        "Nmap scan report for 192.168.55.9\n"
+        "Host is up (0.012s latency).\n"
+        "MAC Address: 1C:5F:2B:FF:28:84 (D-Link International)\n"
+        "Nmap done: 256 IP addresses (2 hosts up) scanned in 8.92 seconds\n"
+    )
+
+    def test_sweep_yields_per_host_device_claims(self):
+        pairs, observed = _parse_nmap(self.SWEEP)
+        devices = [v for k, v in pairs if k == "lan_device"]
+        assert "192.168.55.1" in devices
+        assert "192.168.55.9" in devices
+        assert "192.168.55.1 E4:A8:B6:33:A5:63 (Huawei Technologies)" in devices
+        assert "192.168.55.9 1C:5F:2B:FF:28:84 (D-Link International)" in devices
+        assert observed == "192.168.55.1"
+
+    def test_summary_noise_never_becomes_a_claim(self):
+        pairs, _ = _parse_nmap(self.SWEEP)
+        assert not any("256 IP" in v for _, v in pairs)
+        assert not any("Host is up" in v for _, v in pairs)
+
+
+class TestCidrScope:
+    def test_cidr_matches_members(self):
+        e = ScopeEntry("192.168.55.0/24")
+        assert e.matches("192.168.55.39")
+        assert e.matches("192.168.55.1")
+        assert not e.matches("192.168.56.1")
+        assert not e.matches("lab.example.test")
+
+    def test_cidr_matches_network_literal_itself(self):
+        e = ScopeEntry("192.168.55.0/24")
+        assert e.matches("192.168.55.0/24")
+
+    def test_url_reduced_to_host_for_cidr(self):
+        e = ScopeEntry("192.168.55.0/24")
+        assert e.matches("http://192.168.55.39/admin")
+
+    def test_host_bits_entry_does_not_widen(self):
+        # 192.168.55.9/24 is not a valid network (host bits set): the entry
+        # becomes CIDR-inert — it matches NOTHING by address semantics, not
+        # even itself, so a typo can never silently widen into a whole /24
+        e = ScopeEntry("192.168.55.9/24")
+        assert not e.matches("192.168.55.9")
+        assert not e.matches("192.168.55.10")
+        assert not e.matches("192.168.55.9/24")

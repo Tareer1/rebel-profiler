@@ -236,8 +236,11 @@ rebel-profiler intel payload deploy <case-id> <payload-id> --target <url> --appr
 rebel-profiler intel playbook list              # reviewed multi-step hunt recipes
 rebel-profiler intel playbook show web-audit
 rebel-profiler -y intel playbook run web-audit <case-id> <host> -p scheme http
+rebel-profiler -y intel playbook run lan-inventory <case-id> 192.168.55.0/24
 #   every step passes the six gates; -p overrides merge into steps that
 #   declare the key; add your own: <data-dir>/playbooks/*.json
+#   lan-inventory = OWN-LAN device sweep (admin use): CIDR scope entry must
+#   cover the range; each live host becomes a lan_device claim (MAC + vendor)
 ```
 
 ## 4b. The sci-fi shell (`rebel-profiler shell`)

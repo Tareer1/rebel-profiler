@@ -161,6 +161,13 @@ def builtin_playbooks() -> tuple[Playbook, ...]:
                ("httpx-probe", {},
                 "NXDOMAIN/CNAME answers flag dangling takeover candidates"),
            ]),
+        pb("lan-inventory", "1", "Own-LAN device inventory sweep (admin/authorized use)",
+           "rebel-profiler core", ["lan", "inventory"], [
+               ("host-discovery", {},
+                "ping sweep: every live host becomes a lan_device claim with MAC/vendor"),
+               ("port-scan", {"ports": "22,80,443,8080"},
+                "management and web surfaces on the found devices"),
+           ]),
     )
 
 

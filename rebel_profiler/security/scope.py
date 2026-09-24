@@ -8,12 +8,40 @@ can expire (authorization windows).
 from __future__ import annotations
 
 import fnmatch
+import ipaddress
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 
 from ..core.errors import ScopeViolationError
+
+
+_IP_ONLY_CIDR = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}/\d{1,2}$")
+
+
+def _as_network(value: str):
+    """Return an IPv4Network when *value* is a strict CIDR, else None.
+
+    Strict means ``a.b.c.d/p`` with no host bits set — ``192.168.55.0/24``
+    yes, ``192.168.55.9/24`` no. A wildcard or hostname never reaches here
+    as a network.
+    """
+    value = value.strip()
+    if "/" not in value or "://" in value or "*" in value:
+        return None
+    if not re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}/\d{1,2}", value):
+        return None
+    try:
+        net = ipaddress.ip_network(value, strict=False)
+    except ValueError:
+        return None
+    # strict-only: an entry with host bits set (…9/24) is NOT a network —
+    # accepting it would silently widen to the enclosing range. The caller
+    # then falls back to the entry's literal/wildcard behaviour.
+    if str(net) != value:
+        return None
+    return net
 
 
 def _host_of(value: str) -> str | None:
@@ -67,6 +95,27 @@ class ScopeEntry:
         """
         candidate = candidate.strip().lower().rstrip(".")
         pattern = self.value.strip().lower().rstrip(".")
+        # CIDR entries match members by ADDRESS SEMANTICS, not string form:
+        # 192.168.55.0/24 covers 192.168.55.39, the network address itself,
+        # and the exact range literal (so a sweep whose TARGET is the range
+        # is authorized by that range). Host bits set in the entry (…9/24)
+        # never parse as a network — the entry is CIDR-INERT (matches
+        # nothing by address semantics, not even itself): a typo can never
+        # silently widen into a whole range. Fail-closed holds.
+        net = _as_network(pattern)
+        if net is not None:
+            if candidate == pattern:
+                return True
+            cand = candidate
+            if "://" in cand:
+                cand = _host_of(cand) or ""
+            try:
+                return ipaddress.ip_address(cand) in net
+            except ValueError:
+                return False
+        if "/" in pattern and _IP_ONLY_CIDR.match(pattern):
+            # malformed CIDR (host bits set): deliberately matches nothing
+            return False
         targets = [candidate]
         patterns = [pattern]
         if "://" in candidate:

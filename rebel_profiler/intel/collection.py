@@ -41,20 +41,49 @@ _NMAP_SERVICE_META = re.compile(
 def _parse_nmap(stdout: str) -> tuple[list[tuple[str, str]], str]:
     """Parse nmap grepable/list output into (pairs, observed_ip).
 
-    Understands two shapes:
+    Understands three shapes:
+      * sweep (-sn, host-discovery): ``Nmap scan report for 1.2.3.4`` +
+        ``MAC Address: AA:BB:.. (Vendor)`` → per-host ``lan_device`` claims
       * grepable (-oG -):  ``Host: 1.2.3.4 ()\tPorts: 80/open/tcp//http///``
       * list (-oN - style) port table lines: ``80/tcp   open  http  nginx 1.2``
 
-    Returns pairs of kinds: ip, port, service, product, version. Unparseable
-    lines are dropped — never invented.
+    Returns pairs of kinds: lan_device, ip, port, service, product, version.
+    Unparseable lines are dropped — never invented.
     """
     pairs: list[tuple[str, str]] = []
     observed_ip = ""
+    pending_host = ""          # sweep shape: host seen, MAC line may follow
     for raw_line in stdout.splitlines():
         line = raw_line.rstrip()
         if not line:
             continue
-        # "Nmap scan report for host (1.2.3.4)" — carries the resolved IP
+        # sweep shape: "Nmap scan report for 1.2.3.4" or "... for host (1.2.3.4)"
+        report_match = re.search(
+            r"scan report for (?:\S+ \()?(\d{1,3}(?:\.\d{1,3}){3})\)?", line
+        )
+        if report_match:
+            ip = report_match.group(1)
+            pending_host = ip
+            pairs.append(("lan_device", ip))
+            if not observed_ip:
+                observed_ip = ip
+                pairs.append(("ip", observed_ip))
+            continue
+        # sweep shape vendor line: "MAC Address: E4:A8:B6:33:A5:63 (Huawei...)"
+        mac_match = re.match(
+            r"MAC Address:\s*([0-9A-Fa-f:]{17})(?:\s*\(([^)]+)\))?", line.strip()
+        )
+        if mac_match and pending_host:
+            mac, vendor = mac_match.group(1).upper(), (mac_match.group(2) or "").strip()
+            value = f"{pending_host} {mac}" + (f" ({vendor})" if vendor else "")
+            pairs.append(("lan_device", value))
+            pending_host = ""
+            continue
+        if "Host is up" in line:
+            continue
+        # "Nmap done: 256 IP addresses (3 hosts up) scanned" — summary noise
+        if line.startswith("Nmap done:"):
+            continue
         if not observed_ip:
             report_match = re.search(
                 r"scan report for \S+ \((\d{1,3}(?:\.\d{1,3}){3})\)", line
@@ -785,15 +814,51 @@ class CollectionPipeline:
         if action == "exec-tool":
             tool = str(params.get("tool", "")).lower()
             if tool == "nmap":
-                effective_action = "service-detect"   # nmap-shaped output
+                # a -sn sweep is host DISCOVERY, not a port probe: route to
+                # the sweep parser so each live LAN host becomes a claim
+                if "-sn" in str(params.get("args", "")):
+                    effective_action = "host-discovery"
+                else:
+                    effective_action = "service-detect"   # nmap-shaped output
             # dig/whois wrap into their natural parsers via source mapping below
             elif tool in {"dig", "host"}:
                 effective_action = "dns-lookup"
             elif tool == "whois":
                 effective_action = "whois-lookup"
 
-        if effective_action in {"port-scan", "service-detect", "os-fingerprint"}:
+        if effective_action in {"port-scan", "service-detect", "os-fingerprint",
+                                "host-discovery"}:
             pairs, observed_ip = _parse_nmap(stdout)
+            if effective_action == "host-discovery":
+                # SWEEP: each live host is its own claim, subject = the IP
+                # itself ("192.168.55.9" with MAC + vendor when ARP gave one)
+                for kind, value in pairs:
+                    key = (kind, value.strip().lower())
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    dev_subject = value.split()[0] if kind == "lan_device" else subject
+                    emitted.append(self.ledger.add(
+                        case_id, subject=dev_subject, kind=kind, value=value,
+                        source="scan.nmap", method=action,
+                        observed_at=now, evidence_id=evidence_id,
+                        notes=f"task={task_id}; sweep"
+                        + ("; " + "; ".join(f.rule for f in findings) if findings else ""),
+                    ))
+                report_claims = [c.as_dict() for c in emitted]
+                if self._db is not None:
+                    self._persist(emitted, case_id)
+                return {
+                    "case_id": case_id,
+                    "action": action,
+                    "target": target,
+                    "evidence_id": evidence_id,
+                    "injection_findings": [f.as_dict() for f in findings],
+                    "claims": report_claims,
+                    "claims_emitted": [c.id for c in emitted],
+                    "clean": not findings,
+                    "sanitized_preview": sanitize_external(stdout, source=action)[:400] if findings else "",
+                }
             # nmap reports the resolved IP of the scoped host — record it as a
             # claim on the same subject so exposure mapping can bind ports.
             for kind, value in pairs:

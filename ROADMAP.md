@@ -284,6 +284,12 @@ weakening a single gate. Every item keeps the Phase 1 invariants.
   ids, evidence ids as fingerprints) and a disclosure-draft Markdown with
   the summary table, per-finding repro/remediation sections and unmapped
   observations kept — the same report data, no new findings invented
+- [x] **Own-LAN device inventory** (admin/authorized use): CIDR scope
+  entries now match by address semantics (`192.168.55.0/24` covers its
+  members and the range literal; a host-bits typo like `…9/24` is
+  CIDR-inert and can never silently widen); `nmap -sn` sweeps parse into
+  per-host `lan_device` claims with MAC + OUI vendor; the `lan-inventory`
+  playbook runs sweep + management-port scan through the normal six gates
 - [ ] **Coverage-driven planning**: feed `intel vuln-coverage` blind spots
   straight into the planner so "audit what you have not covered yet"
   becomes the default next action, not a manual choice
