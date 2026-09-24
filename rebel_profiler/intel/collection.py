@@ -615,6 +615,78 @@ def _parse_nuclei_jsonl(stdout: str) -> list[tuple[str, str]]:
     return pairs[:100]
 
 
+_HEADER_INTEREST = re.compile(
+    r"^(strict-transport-security|content-security-policy|x-frame-options|"
+    r"x-content-type-options|referrer-policy|permissions-policy|location|"
+    r"server|x-powered-by)\s*:\s*(.{1,200})$", re.I)
+_COOKIE_LINE = re.compile(r"^set-cookie\s*:\s*([^=;]{1,60}=)(.{0,200})", re.I)
+
+
+def _parse_header_head(stdout: str) -> list[tuple[str, str]]:
+    """curl -sSI header head: security headers + cookie FLAGS become claims.
+
+    Cookie values are secrets — only the name and the flags
+    (Secure/HttpOnly/SameSite) are recorded, never the value.
+    """
+    pairs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        cookie = _COOKIE_LINE.match(line)
+        if cookie:
+            name, rest = cookie.group(1).rstrip("="), cookie.group(2).lower()
+            flags = [f for f in ("secure", "httponly", "samesite=strict",
+                                 "samesite=lax", "samesite=none") if f in rest]
+            value = f"{name}: {'; '.join(flags) if flags else 'no security flags'}"
+            key = f"cookie:{name.lower()}"
+            if key not in seen:
+                seen.add(key)
+                pairs.append(("cookie_flag", value))
+            continue
+        hm = _HEADER_INTEREST.match(line)
+        if hm:
+            name, value = hm.group(1).lower(), hm.group(2).strip()
+            key = f"header:{name}"
+            if key not in seen:
+                seen.add(key)
+                pairs.append(("header_obs", f"{name}: {value}"))
+    return pairs[:40]
+
+
+def _parse_sslscan(stdout: str) -> list[tuple[str, str]]:
+    """sslscan output: enabled/disabled protocols + cipher + vuln markers."""
+    pairs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for line in stdout.splitlines():
+        line = line.strip()
+        pm = re.match(r"^(SSLv2|SSLv3|TLSv1\.[0-3]|TLSv1)\s+(enabled|disabled)", line, re.I)
+        if pm:
+            proto, state = pm.group(1).lower(), pm.group(2).lower()
+            key = f"proto:{proto}"
+            if key not in seen:
+                seen.add(key)
+                # enabled legacy protocol is the finding; enabled TLS1.2/1.3 is a pass
+                if state == "enabled":
+                    pairs.append(("tls_protocol", f"{proto} enabled"
+                                  + (" (legacy — downgrade risk)" if proto in {"sslv2", "sslv3", "tlsv1.0", "tlsv1.1"} else "")))
+            continue
+        vm = re.search(r"(heartbleed|CCS|logjam|FREAK|POODLE)[:\s]", line, re.I)
+        if vm:
+            # Skip sslscan section headers ('Heartbleed:') and 'not
+            # vulnerable' noise; only an actual vulnerable verdict is a claim.
+            is_header = line.rstrip().endswith(":")
+            says_not = "not vulnerable" in line.lower()
+            if vm and not is_header and not says_not:
+                key = f"vuln:{vm.group(1).lower()}"
+                if key not in seen:
+                    seen.add(key)
+                    pairs.append(("tls_vuln", line[:120]))
+            continue
+    return pairs[:40]
+
+
 def _parse_ct_json(stdout: str, *, limit: int = 50) -> list[tuple[str, str]]:
     """Parse crt.sh JSON output into (kind, value) pairs.
 
@@ -798,6 +870,10 @@ class CollectionPipeline:
             pairs = _parse_param_hunt(stdout, subject)
         elif effective_action == "nuclei-scan":
             pairs = _parse_nuclei_jsonl(stdout)
+        elif effective_action == "header-audit":
+            pairs = _parse_header_head(stdout)
+        elif effective_action == "tls-posture":
+            pairs = _parse_sslscan(stdout)
         else:
             pairs = []
 
@@ -872,6 +948,8 @@ class CollectionPipeline:
             "httpx-probe": "scan.web",
             "param-hunt": "scan.web",
             "nuclei-scan": "scan.nuclei",
+            "header-audit": "scan.web",
+            "tls-posture": "scan.tls",
             "probe": "scan.web",
         }.get(action, "unknown")
 

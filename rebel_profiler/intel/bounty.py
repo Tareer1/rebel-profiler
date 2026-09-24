@@ -164,6 +164,54 @@ RULES: tuple[Rule, ...] = (
         reproduce="curl -sSI {url} | grep -i '^location'",
         impact="The cleartext hop can be intercepted before the upgrade.",
     ),
+    # ---- scanner findings (nuclei) & marker findings (offense plane) ----
+    Rule(
+        prefix="nuclei_finding",
+        title="Template-based scanner hit",
+        severity="medium",
+        cwe="CWE-2000",   # severity rides the template; triager re-checks
+        remediation="Verify the template hit manually (probe) and patch the "
+                    "affected component; the template-id names the class.",
+        reproduce="nuclei -u {url} -severity medium,high,critical -silent",
+        impact="A public template matched a known vulnerable pattern.",
+    ),
+    Rule(
+        prefix="nuclei_detail",
+        title="Scanner extractor captured data",
+        severity="informational",
+        cwe="CWE-200",
+        remediation="Review the extracted value; tighten whatever exposes it.",
+        reproduce="nuclei -u {url} -silent",
+        impact="The scanner's extractor returned content worth reviewing.",
+    ),
+    Rule(
+        prefix="tls_vuln",
+        title="Legacy TLS vulnerability marker",
+        severity="high",
+        cwe="CWE-326",
+        remediation="Upgrade OpenSSL/TLS stack; disable vulnerable protocol "
+                    "extensions (heartbleed/CCS/logjam/FREAK/POODLE class).",
+        reproduce="sslscan {host}:443 | grep -iA2 -E 'heartbleed|CCS|logjam|FREAK|POODLE'",
+        impact="A known TLS-protocol attack applies to this endpoint.",
+    ),
+    Rule(
+        prefix="tls_protocol",
+        title="Legacy TLS protocol enabled (sslscan)",
+        severity="medium",
+        cwe="CWE-326",
+        remediation="Disable SSLv2/v3 and TLS 1.0/1.1; require TLS 1.2+.",
+        reproduce="sslscan {host}:443 | grep -i 'enabled'",
+        impact="Downgrade attacks become possible on legacy protocol versions.",
+    ),
+    Rule(
+        prefix="cookie_flag:no security flags",
+        title="Cookie without any security flags (direct audit)",
+        severity="low",
+        cwe="CWE-1004",
+        remediation="Set Secure; HttpOnly; and an explicit SameSite on every cookie.",
+        reproduce="curl -sSI {url} | grep -i set-cookie",
+        impact="Session material may leak to scripts or cleartext transport.",
+    ),
 )
 
 # Cleartext / over-exposed services seen in discovery output.

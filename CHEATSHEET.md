@@ -224,6 +224,24 @@ rebel-profiler intel claims <case-id> [subject]
 rebel-profiler intel sources [source-key]
 rebel-profiler intel sanitize "<untrusted text>"
 rebel-profiler intel fusion <case-id> [subject]
+rebel-profiler intel attack-plan <case-id>      # ranked strategies from this case's evidence
+rebel-profiler intel vuln-coverage <case-id>    # which vuln classes are probed vs blind spots
+rebel-profiler intel payload build <case-id> <payload-class>   # benign marker, no impact
+rebel-profiler intel payload deploy <case-id> <payload-id> --target <url> --approve
+```
+
+## 4b. The sci-fi shell (`rebel-profiler shell`)
+
+A unicode interactive console over the SAME argparse main — no second parser,
+no second set of gates. ANSI colour auto-disables on pipes/CI; `NO_COLOR` or
+`RP_PLAIN=1` flattens the whole aesthetic.
+
+```bash
+rebel-profiler shell            # banner + readline loop
+# console commands: :help :case <id> :status :plan :cover :tools :banner :clear :exit
+# everything else runs verbatim as a rebel-profiler command:
+#   intel collect <case> subfinder-enum crypto.com
+#   bounty hunt crypto --no-author
 ```
 
 ## 5. Surface, graph & reports

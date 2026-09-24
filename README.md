@@ -157,6 +157,11 @@ rebel-profiler bounty auto <case-id> \
 
 # 20. Health check
 rebel-profiler doctor
+
+# 21. The sci-fi shell — the whole CLI as an interactive unicode console
+rebel-profiler shell
+#   :help :case <id> :status :plan :cover :tools :banner :clear :exit
+#   anything else runs verbatim through the same parser and the same gates
 ```
 
 > **Daily-use cheat-sheet:** [CHEATSHEET.md](CHEATSHEET.md) — every command,
@@ -308,6 +313,20 @@ The same law applies: the model only calls tools that exist, every adapter
 call passes the six gates, and results re-enter the prompt redacted and
 bounded. The raw `rebel-profiler` commands stay the scripting/CI source of
 truth.
+
+### The sci-fi console (`shell`) & the themed human output
+
+The terminal face of the tool is unicode + ANSI: a banner on `shell`, box-drawn
+tables, framed structured errors (`what happened / why / next action`, exit
+code footer), glyph-marked verdicts (`⬢` shield, `✓` ok, `⚠` warn, `∴` dots).
+The shell is a readline loop whose `:` commands (`:plan`, `:cover`, `:status`…)
+and every plain command line dispatch through the ONE argparse main — no second
+parser, no second set of gates.
+
+Decoration is human-mode only and honest by contract: JSON/JSONL/CSV are
+byte-identical to before, colour auto-disables on pipes and CI, and `NO_COLOR`
+or `RP_PLAIN=1` flattens the aesthetic completely. The theme lives in
+`rebel_profiler/cli/theme.py` — palette, glyphs, banner, error frame, tables.
 
 ### The Autonomous Engineer (`agent auto`)
 

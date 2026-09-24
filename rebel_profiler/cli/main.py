@@ -21,6 +21,7 @@ from ..core.errors import EXIT_SUCCESS, EXIT_USAGE, RPError, UsageError
 from ..evidence.audit import AuditChain
 from ..intel.claims import ClaimLedger
 from ..intel.sources import SourceRegistry
+from . import theme
 from .context import AppContext
 
 GLOBAL_FLAGS = [
@@ -74,10 +75,9 @@ def _flatten(value, prefix: str = "") -> dict:
 
 def _emit_human(payload) -> None:
     if isinstance(payload, dict) and "human" in payload:
-        print(payload["human"])
         data = payload.get("data")
-        if isinstance(data, list) and data and all(isinstance(d, dict) for d in data):
-            _print_table(data)
+        rows = data if isinstance(data, list) and data and all(isinstance(d, dict) for d in data) else None
+        print(theme.panel(payload["human"], rows))
     elif isinstance(payload, list):
         for item in payload:
             _emit_human(item)
@@ -86,21 +86,10 @@ def _emit_human(payload) -> None:
 
 
 def _print_table(rows: list[dict]) -> None:
-    cols: list[str] = []
-    for r in rows:
-        for k in r:
-            if k not in cols:
-                cols.append(k)
-    if not cols:
-        return
-    widths = {
-        c: max([len(c), *(len(str(r.get(c, ""))) for r in rows)]) for c in cols
-    }
-    line = "  ".join(c.ljust(widths[c]) for c in cols)
-    print(line)
-    print("  ".join("-" * widths[c] for c in cols))
-    for r in rows:
-        print("  ".join(str(r.get(c, "")).ljust(widths[c]) for c in cols))
+    """Kept for callers that print a bare table; themed like the panel."""
+    rendered = theme.table(rows)
+    if rendered:
+        print(rendered)
 
 
 # ---------------------------------------------------------------------------
@@ -490,9 +479,9 @@ def cmd_intel(ctx: AppContext, args: argparse.Namespace) -> int:
     if args.intel_command == "hunt":
         return _cmd_intel_hunt(ctx, args)
     if args.intel_command == "attack-plan":
-        from ..intel.claims import ClaimLedger as _CL   # noqa: F401 (used below)
-
         return _cmd_intel_attack_plan(ctx, args)
+    if args.intel_command == "vuln-coverage":
+        return _cmd_intel_vuln_coverage(ctx, args)
     if args.intel_command == "payload":
         return _cmd_intel_payload(ctx, args)
     if args.intel_command == "fusion":
@@ -684,6 +673,31 @@ def cmd_agent(ctx: AppContext, args: argparse.Namespace) -> int:
         return EXIT_SUCCESS if ok else 1
     finally:
         db.close()
+
+
+def _cmd_intel_vuln_coverage(ctx: AppContext, args: argparse.Namespace) -> int:
+    """Vulnerability-class coverage matrix for this case's evidence."""
+    from ..intel.claims import ClaimLedger
+    from ..intel.vulncov import coverage_for_case
+
+    rec = ctx.find_case(args.case_id)
+    db = ctx.open_case(rec["id"])
+    try:
+        ledger = ClaimLedger.load_from_db(db, rec["id"])
+        report = coverage_for_case(ledger, rec["id"])
+    finally:
+        db.close()
+    human = [f"Vulnerability coverage — case {rec['id']}: "
+             f"{report['covered']} covered, {report['available']} available, "
+             f"{report['no_adapter']} without adapter (of {report['total']})"]
+    mark = {"covered": "[x]", "available": "[ ]", "no-adapter": "[!]"}
+    for row in report["classes"]:
+        human.append(f"  {mark[row['status']]} {row['class']:<18} "
+                     f"{row['cwe']:<9} {row['title']}")
+        if row["status"] == "available":
+            human.append(f"        run: intel collect {' / '.join(row['detect_actions'][:3])}")
+    emit({"human": "\n".join(human), "data": report}, args.output)
+    return EXIT_SUCCESS
 
 
 def _cmd_intel_attack_plan(ctx: AppContext, args: argparse.Namespace) -> int:
@@ -1248,6 +1262,25 @@ def cmd_hypothesis(ctx: AppContext, args: argparse.Namespace) -> int:
         db.close()
 
 
+def _read_text_arg(path: str | None, *, stdin_ok: bool = False) -> str:
+    """Read a path argument to text. '-' (or None with stdin_ok) reads stdin.
+
+    Replaces the deprecated argparse.FileType: a missing file becomes a
+    structured UsageError instead of an interpreter-level failure.
+    """
+    if path in (None, "-"):
+        if stdin_ok:
+            return sys.stdin.read()
+        raise UsageError("No input file provided",
+                         action="Pass a file path as the argument.")
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return fh.read()
+    except OSError as exc:
+        raise UsageError(f"Cannot read file: {path}", reason=str(exc),
+                         action="Check the path exists and is readable.")
+
+
 def cmd_workflow(ctx: AppContext, args: argparse.Namespace) -> int:
     from ..evidence.audit import AuditChain
     from ..execution.workflow import WorkflowRunner, parse_workflow
@@ -1257,16 +1290,13 @@ def cmd_workflow(ctx: AppContext, args: argparse.Namespace) -> int:
     try:
         runner = WorkflowRunner(db, ctx.broker(db), AuditChain(db))
         if args.workflow_command == "create":
-            # argparse FileType already opened the file; read() it (regression:
-            # .read_text() on an open file object crashed with AttributeError).
-            spec = parse_workflow(args.dsl_file.read())
+            spec = parse_workflow(_read_text_arg(args.dsl_file))
             started = runner.start(rec["id"], spec)
             emit({"human": f"Workflow '{started['name']}' created: {started['workflow_id']} "
                            f"({started['steps']} steps)", "data": started}, args.output)
         elif args.workflow_command == "run":
             if args.dsl_file is not None:
-                # FileType opened it already — read() (see create above).
-                spec = parse_workflow(args.dsl_file.read())
+                spec = parse_workflow(_read_text_arg(args.dsl_file))
                 started = runner.start(rec["id"], spec)
                 status = runner.resume(rec["id"], started["workflow_id"])
             else:
@@ -1866,9 +1896,7 @@ def cmd_forge(ctx: AppContext, args: argparse.Namespace) -> int:
 
     forge = FeatureForge(ctx.data_dir, audit=None)
     if args.forge_command == "propose":
-        # argparse FileType already opened the file; read() it (regression:
-        # .read_text() on an open file object crashed with AttributeError).
-        source = args.source_file.read() if args.source_file else sys.stdin.read()
+        source = _read_text_arg(args.source_file, stdin_ok=True)
         if not source.strip():
             raise UsageError(
                 "No adapter source provided",
@@ -2914,7 +2942,11 @@ def cmd_doctor(ctx: AppContext, args: argparse.Namespace) -> int:
     for section, key in PROTECTED_SECURITY_KEYS:
         checks.append({"check": f"protected: {section}.{key}", "ok": "yes", "detail": "enforced"})
     ok = all(c["ok"] == "yes" for c in checks)
-    emit({"human": ("doctor: ALL CHECKS PASSED" if ok else "doctor: ISSUES FOUND (see table)"),
+    verdict = (f"doctor: ALL CHECKS PASSED {theme.GREEN}{theme.GLYPHS['ok']}{theme.RESET}"
+               if ok else
+               f"doctor: ISSUES FOUND {theme.YELLOW}{theme.GLYPHS['warn']}{theme.RESET} "
+               "(see table)")
+    emit({"human": f"{theme.CYAN}{theme.GLYPHS['shield']} {verdict}{theme.RESET}",
           "data": checks}, args.output)
     return EXIT_SUCCESS if ok else 1
 
@@ -3171,6 +3203,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_iap.add_argument("case_id")
     p_iap.add_argument("--save-payloads", action="store_true",
                        help="write attack_plan.json into the case directory")
+    p_ivc = intel_subs.add_parser("vuln-coverage", parents=[sub_common],
+                                  help="vulnerability-class coverage matrix: what this case has probed vs blind spots")
+    p_ivc.add_argument("case_id")
     p_ipay = intel_subs.add_parser("payload", parents=[sub_common],
                                    help="payload workbench: build benign impact-markers, deploy them through the approval-gated probe")
     ipay_subs = p_ipay.add_subparsers(dest="payload_command", required=True)
@@ -3253,11 +3288,11 @@ def build_parser() -> argparse.ArgumentParser:
     wf_subs = p_wf.add_subparsers(dest="workflow_command", required=True)
     p_wfc = wf_subs.add_parser("create", parents=[sub_common], help="create from a DSL file (checkpoint only)")
     p_wfc.add_argument("case_id")
-    p_wfc.add_argument("dsl_file", type=argparse.FileType("r"))
+    p_wfc.add_argument("dsl_file", type=str)
     p_wfr = wf_subs.add_parser("run", parents=[sub_common], help="run/resume a workflow (resumable checkpoints)")
     p_wfr.add_argument("case_id")
     p_wfr.add_argument("workflow_id", nargs="?")
-    p_wfr.add_argument("--dsl-file", type=argparse.FileType("r"), default=None)
+    p_wfr.add_argument("--dsl-file", type=str, default=None)
     p_wfa = wf_subs.add_parser("approve", parents=[sub_common], help="decide an approval-gate step")
     p_wfa.add_argument("case_id")
     p_wfa.add_argument("workflow_id")
@@ -3458,7 +3493,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_forge = subs.add_parser("forge", parents=[sub_common], help="Feature Forge: the LLM writes its own adapters (gated)")
     forge_subs = p_forge.add_subparsers(dest="forge_command", required=True)
     p_fprop = forge_subs.add_parser("propose", parents=[sub_common], help="submit adapter source through the safety gates")
-    p_fprop.add_argument("source_file", nargs="?", type=argparse.FileType("r"), default=None)
+    p_fprop.add_argument("source_file", nargs="?", type=str, default=None)
     p_fprop.add_argument("--author", default="")
     p_fprop.add_argument("--test-cases", default="", help="JSON list of {target, params} sandbox cases")
     forge_subs.add_parser("list", parents=[sub_common], help="list forged modules")
@@ -3723,6 +3758,9 @@ def build_parser() -> argparse.ArgumentParser:
     # doctor
     subs.add_parser("doctor", parents=[sub_common], help="environment and configuration health check")
 
+    # shell — the sci-fi unicode interactive console
+    subs.add_parser("shell", parents=[sub_common], help="interactive sci-fi console over the same CLI (unicode prompt, :plan/:cover/:tools)")
+
     return parser
 
 
@@ -3744,7 +3782,8 @@ def main(argv: list[str] | None = None) -> int:
         # A bad --config-file must fail like every other error: structured,
         # with a fix hint — never a traceback.
         if getattr(args, "output", "human") == "human":
-            print(exc.render(), file=sys.stderr)
+            print(theme.error_frame(exc.title, exc.message, exc.reason,
+                                    exc.action, exc.exit_code), file=sys.stderr)
         else:
             print(json.dumps({"error": {"title": exc.title, "message": exc.message,
                                         "reason": exc.reason, "action": exc.action,
@@ -3787,10 +3826,15 @@ def main(argv: list[str] | None = None) -> int:
             "bounty": cmd_bounty,
             "doctor": cmd_doctor,
         }
+        if args.group == "shell":
+            from .shell import run_shell
+
+            return run_shell(ctx)
         return handlers[args.group](ctx, args)
     except RPError as exc:
         if getattr(args, "output", "human") == "human":
-            print(exc.render(), file=sys.stderr)
+            print(theme.error_frame(exc.title, exc.message, exc.reason,
+                                    exc.action, exc.exit_code), file=sys.stderr)
         else:
             print(json.dumps({"error": {"title": exc.title, "message": exc.message,
                                         "reason": exc.reason, "action": exc.action,

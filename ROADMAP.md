@@ -212,3 +212,43 @@ evidence-free claims, scope always fail-closed, LLM proposes but never decides.
 - [x] Tests: engine contract (stub binary, offline), MCP wire protocol,
   approval flow end to end (queue → decision → execution → claims), GUI
   whitelist extensions — suite green (885 passing)
+
+## Phase 11 — Offense plane, coverage matrix & the sci-fi shell ✅
+
+- [x] **Attack-plan engine** (`intel attack-plan`): ranked, evidence-driven
+  strategies from the case's own claim ledger — every proposed strategy names
+  the live actions that would execute, never a generic checklist
+- [x] **Payload workbench** (`intel payload build/deploy`): benign
+  impact-marker payloads (reflected-XSS echo marker, SSTI math marker,
+  traversal single-file read, open-redirect self-reference, cmdi echo) built
+  deterministically and deployed ONLY through the approval-gated probe —
+  markers prove a class, they never cause damage
+- [x] **Vulnerability-coverage matrix** (`intel vuln-coverage`,
+  `intel/vulncov.py`): 21 vulnerability classes × the live actions that detect
+  them × the payload class that verifies them; per case it reports COVERED
+  (a detect action already produced claims), AVAILABLE (executable, not yet
+  run) and NO-ADAPTER, with a `run:` hint per blind spot — rows are data
+  validated against the live AdapterRegistry by tests, so the matrix cannot
+  drift from what the tool executes
+- [x] **New parsers** (`intel/collection.py`): `_parse_header_head` (curl `-sSI`
+  output → security-header observations + cookie-FLAG claims; the cookie VALUE
+  is never recorded, only the name and Secure/HttpOnly/SameSite state) and
+  `_parse_sslscan` (enabled legacy protocols + vulnerable-marker lines,
+  "not vulnerable" noise never becomes a claim)
+- [x] **Triage rules** (`intel/bounty.py`): five new bounty-assess rules for
+  nuclei findings/details, TLS vulnerability markers, legacy TLS protocols and
+  flagless cookies — severity, CWE, reproduction command and remediation each
+- [x] **The sci-fi shell** (`rebel-profiler shell`, `cli/shell.py`): a unicode
+  readline console over the ONE argparse main — banner, `:help/:case/:status/
+  :plan/:cover/:tools/:banner/:clear/:exit`, everything else runs verbatim;
+  no second parser, no second set of gates
+- [x] **The themed human output** (`cli/theme.py`): shared palette + glyphs,
+  banner, box-drawn tables, framed structured errors with exit-code footer;
+  additive-only decoration (every original fragment stays grep-findable),
+  JSON/JSONL/CSV untouched, colour auto-off on pipes/CI, `NO_COLOR`/`RP_PLAIN`
+  flatten everything
+- [x] **Deprecated argparse.FileType removed**: workflow/forge file arguments
+  read through `_read_text_arg` with structured UsageError on missing files
+- [x] Tests: shell helpers + piped loop, coverage-matrix honesty (every class
+  has a live detect action and a buildable payload), header/sslscan parser
+  shapes — suite green (947 passing)
