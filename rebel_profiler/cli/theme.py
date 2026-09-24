@@ -31,6 +31,7 @@ def _stdout_is_tty() -> bool:
 
 
 _COLOR_ON = (not _NO_COLOR) and (not _PLAIN) and _stdout_is_tty()
+_UNICODE_ON = not (_NO_COLOR or _PLAIN)
 
 
 def _c(code: str) -> str:
@@ -62,13 +63,26 @@ GLYPHS = {
     "skull": "☠",
 }
 
-# box-drawing set for tables and frames
+# box-drawing set for tables and frames — ASCII when the aesthetic is off
 BOX = {
     "tl": "╭", "tr": "╮", "bl": "╰", "br": "╯",
     "h": "─", "v": "│",
     "ml": "├", "mr": "┤",
     "sep": "┄",           # light dashed separator inside tables
+} if _UNICODE_ON else {
+    "tl": "+", "tr": "+", "bl": "+", "br": "+",
+    "h": "-", "v": "|",
+    "ml": "+", "mr": "+",
+    "sep": "-",
 }
+
+# Glyphs go ASCII in plain mode too — same truthiness, terminal-safe shapes.
+if not _UNICODE_ON:
+    GLYPHS = {
+        "shield": "#", "bolt": "~", "node": "o", "ok": "+", "no": "x",
+        "warn": "!", "arrow": "->", "dots": ".", "star": "*", "eye": "*",
+        "net": "#", "chip": "#", "lock": "[L]", "skull": "X",
+    }
 
 WIDTH = 78
 
@@ -163,14 +177,15 @@ def table(rows: list[dict]) -> str:
     widths = {c: max([_display_width(c),
                       *(_display_width(str(r.get(c, ""))) for r in rows)])
               for c in cols}
-    inner = sum(widths.values()) + 3 * (len(cols) - 1) + 2
+    inner = sum(widths.values()) + 2 * (len(cols) - 1) + 2
 
     def rule(left: str, right: str) -> str:
         return f"{DIM}{left}{BOX['h'] * inner}{right}{RESET}"
 
     out = [rule(BOX["tl"], BOX["tr"])]
-    header = " " + "  ".join(_pad(c, widths[c]) for c in cols)
-    out.append(f"{BOLD}{GLYPHS['chip']}{RESET}{header}")
+    header = (f"{BOLD}{GLYPHS['chip']}{RESET}" if _COLOR_ON else GLYPHS["chip"]) \
+        + " " + "  ".join(_pad(c, widths[c]) for c in cols)
+    out.append(header)
     out.append(rule(BOX["ml"], BOX["mr"]))
     for i, r in enumerate(rows):
         cells = "  ".join(_pad(str(r.get(c, "")), widths[c]) for c in cols)

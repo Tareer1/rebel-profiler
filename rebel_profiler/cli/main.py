@@ -73,11 +73,32 @@ def _flatten(value, prefix: str = "") -> dict:
     return out
 
 
+def _humanize_rows(rows: list[dict]) -> list[dict]:
+    """Render copy of data rows for the human table: epochs → ISO time.
+
+    The underlying payload is never mutated — JSON/JSONL/CSV stay raw.
+    """
+    import datetime
+
+    out: list[dict] = []
+    for r in rows:
+        row = dict(r)
+        for k, v in r.items():
+            if k.endswith("_at") or k.endswith("_time"):
+                try:
+                    row[k] = datetime.datetime.fromtimestamp(
+                        float(v)).strftime("%Y-%m-%d %H:%M:%S")
+                except (TypeError, ValueError, OSError, OverflowError):
+                    pass
+        out.append(row)
+    return out
+
+
 def _emit_human(payload) -> None:
     if isinstance(payload, dict) and "human" in payload:
         data = payload.get("data")
         rows = data if isinstance(data, list) and data and all(isinstance(d, dict) for d in data) else None
-        print(theme.panel(payload["human"], rows))
+        print(theme.panel(payload["human"], _humanize_rows(rows) if rows else rows))
     elif isinstance(payload, list):
         for item in payload:
             _emit_human(item)

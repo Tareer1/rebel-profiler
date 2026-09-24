@@ -34,19 +34,8 @@ CYAN, GREEN, RED, YELLOW, MAGENTA = (theme.CYAN, theme.GREEN, theme.RED,
                                      theme.YELLOW, theme.MAGENTA)
 RESET, DIM, BOLD = theme.RESET, theme.DIM, theme.BOLD
 
-BANNER_LINES = (
-    f"{CYAN}{BOLD}  ⬢⬢⬢  R E B E L · P R O F I L E R{RESET}",
-    f"{DIM}  ═══════════════════════════════════{RESET}",
-    f"{MAGENTA}  ⌁ authorized security operations ⌁{RESET}",
-    f"{DIM}  the LLM reasons · the system decides{RESET}",
-    f"{DIM}  type :help for the console map{RESET}",
-)
-
-
 def _render_banner(ctx) -> None:
     print(theme.banner())
-    for line in BANNER_LINES[2:]:
-        print(line)
     try:
         cases = ctx.list_cases()
         active = [c for c in cases if c.get("status") == "active"]
@@ -59,7 +48,7 @@ def _render_banner(ctx) -> None:
 def _prompt(case_id: str) -> str:
     case_part = f" ── {CYAN}{case_id}{RESET}" if case_id else ""
     return (f"\n{MAGENTA}╭─[{BOLD}# REBEL{RESET}{MAGENTA} ──{RESET}"
-            f"{DIM} rebel-profiler{RESET}{case_part}\n"
+            f"{DIM} rebel-profiler{RESET}{case_part}{MAGENTA} ─{RESET}\n"
             f"{MAGENTA}╰─{CYAN}◈{RESET}{CYAN} rebel ❯{RESET} ")
 
 
