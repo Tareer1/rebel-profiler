@@ -263,19 +263,27 @@ evidence-free claims, scope always fail-closed, LLM proposes but never decides.
 The engine is built; this phase is about putting it in more hands without
 weakening a single gate. Every item keeps the Phase 1 invariants.
 
-- [ ] **Zipapp self-update** (`ops update`): fetch the latest release asset,
+- [x] **Zipapp self-update** (`ops update`): fetch the latest release asset,
   verify its sha256 against the published checksum, atomically replace the
   running zipapp; refused entirely when offline or when the checksum does
-  not match
+  not match — tested against a local fixture release, mismatch never
+  touches the installed bytes
 - [ ] **Post-quantum readiness review**: inventory every hash (SHA-256
   evidence chains, HMAC audit signing) and key agreement surface against
   the NIST PQC migration path; document what must change first
-- [ ] **Hunt playbooks**: named, versioned multi-step hunt recipes (YAML)
-  that expand into bounded agent plans — reviewed, scoped, and audited like
-  every other plan source
-- [ ] **Report export formats**: SARIF + Markdown renderers beside the
-  existing human/JSON bounty report so findings drop straight into triage
-  tooling and disclosure drafts
+- [x] **Hunt playbooks** (`intel playbook list/show/run`,
+  `intel/playbooks.py`): named, versioned multi-step hunt recipes — four
+  built-ins (quick-surface, web-audit, js-secrets, dns-health) plus operator
+  files from `<data-dir>/playbooks/*.json`. Every step is validated against
+  the live AdapterRegistry (unknown action or undeclared param = reported,
+  never run); expansion is plan-only and execution still passes the six
+  gates per step; operator `-p` overrides merge into steps that declare the
+  key
+- [x] **Report export formats** (`bounty report --fmt sarif|markdown`):
+  SARIF 2.1.0 for code-scanning triage (severity → level mapping, CWE rule
+  ids, evidence ids as fingerprints) and a disclosure-draft Markdown with
+  the summary table, per-finding repro/remediation sections and unmapped
+  observations kept — the same report data, no new findings invented
 - [ ] **Coverage-driven planning**: feed `intel vuln-coverage` blind spots
   straight into the planner so "audit what you have not covered yet"
   becomes the default next action, not a manual choice

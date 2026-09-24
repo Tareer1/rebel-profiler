@@ -118,9 +118,20 @@ class HttpProbeAdapter(Adapter):
     _PORTS = r"\d{1,5}(,\d{1,5})*"
     _THREADS = r"\d{1,3}"
 
+    @staticmethod
+    def _resolve_binary() -> str:
+        import shutil
+
+        # Same Kali reality as httpx-probe: the ProjectDiscovery toolkit
+        # ships as httpx-toolkit; bare httpx is the Python client.
+        for candidate in ("httpx-toolkit", "httpx"):
+            if shutil.which(candidate):
+                return candidate
+        return HttpProbeAdapter.binary
+
     def build_argv(self, request: ActionRequest) -> list[str]:
         host = _single_token(request.target, field="host", pattern=self._HOSTNAME)
-        argv = [self.binary, "-u", host, "-title", "-status-code", "-no-color"]
+        argv = [self._resolve_binary(), "-u", host, "-title", "-status-code", "-no-color"]
         ports = request.params.get("ports")
         if ports is not None:
             ports = _single_token(ports, field="ports", pattern=self._PORTS)
@@ -363,13 +374,29 @@ class TechFingerprintAdapter(Adapter):
     name = "tech-fingerprint"
     binary = "whatweb"
     capability_class = "web_assessment"
-    allowed_params = ()
+    allowed_params = ("port", "scheme")
     required_params = ()
 
+    _HOSTNAME = r"[A-Za-z0-9.-]+"
+    _PORT = r"\d{1,5}"
+    _SCHEME = r"https?"
     _URL = r"https?://[A-Za-z0-9./_-]+"
 
     def build_argv(self, request: ActionRequest) -> list[str]:
-        url = _single_token(request.target, field="url", pattern=self._URL)
+        if "://" in request.target:
+            # full URL target (historical contract) passes through validated
+            url = _single_token(request.target, field="url", pattern=self._URL)
+        else:
+            # bare host like the other web adapters: the scheme/port params
+            # build the URL, so playbook overrides land here too
+            host = _single_token(request.target, field="host",
+                                 pattern=self._HOSTNAME)
+            port = request.params.get("port")
+            if port is not None:
+                port = _single_token(port, field="port", pattern=self._PORT)
+            scheme = str(request.params.get("scheme", "https"))
+            scheme = _single_token(scheme, field="scheme", pattern=self._SCHEME)
+            url = f"{scheme}://{host}" + (f":{port}" if port else "")
         # no -q: quiet mode suppresses the result line we parse
         return [self.binary, "--no-errors", "--color=never", url]
 

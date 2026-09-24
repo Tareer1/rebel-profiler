@@ -103,7 +103,7 @@ class TestHttpProbeAdapter:
                          target="host1.lab.example.test",
                          params={"tech_detect": True, "threads": "10"})
         )
-        assert argv[0] == "httpx"
+        assert argv[0] in ("httpx", "httpx-toolkit")   # Kali resolves the toolkit
         assert "-tech-detect" in argv
         assert "10" in argv
 

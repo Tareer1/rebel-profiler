@@ -135,6 +135,81 @@ def package_zipapp(source_dir: Path, out_path: Path,
             "sha256": _sha256_file(out_path)}
 
 
+def _fetch(url: str, dest: Path) -> None:
+    """Download ``url`` to ``dest`` (urllib, small file, no third-party deps)."""
+    import urllib.request
+
+    req = urllib.request.Request(url, headers={"User-Agent": "rebel-profiler-ops"})
+    with urllib.request.urlopen(req, timeout=60) as resp, dest.open("wb") as fh:
+        while True:
+            chunk = resp.read(65_536)
+            if not chunk:
+                break
+            fh.write(chunk)
+
+
+def update_zipapp(target: Path, *, base_url: str = (
+        "https://github.com/Tareer1/rebel-profiler/releases/latest/download"),
+        expect_version: str = "") -> dict:
+    """Self-update the running zipapp from the latest GitHub release.
+
+    Law of the operation: NOTHING is installed unless the published sha256
+    matches the downloaded bytes. The new file is staged next to the target
+    and moved into place atomically (os.replace) only after verification, so
+    a half-download can never leave a broken tool behind. Offline or
+    checksum-mismatch are structured errors, never silent passes.
+    """
+    import os
+    import tempfile
+
+    target = Path(target)
+    if not target.exists():
+        raise UsageError(
+            f"No zipapp at {target}",
+            action="Pass the path to the installed rebel-profiler.pyz, or run "
+                   "this from the pip/venv install instead.")
+    tmp_dir = Path(tempfile.mkdtemp(prefix="rp-update-"))
+    try:
+        pyz_tmp, sha_tmp = tmp_dir / "rp.pyz", tmp_dir / "rp.pyz.sha256"
+        try:
+            _fetch(f"{base_url}/rebel-profiler.pyz", pyz_tmp)
+            _fetch(f"{base_url}/rebel-profiler.pyz.sha256", sha_tmp)
+        except OSError as exc:
+            raise StateError(
+                "Update check failed — the release assets are unreachable",
+                reason=str(exc),
+                action="Check the network; the tool keeps working as-is.")
+        expected = sha_tmp.read_text().split()[0].strip().lower()
+        actual = _sha256_file(pyz_tmp)
+        if actual != expected:
+            raise StateError(
+                "SHA-256 MISMATCH — the downloaded update was not installed",
+                reason=f"expected {expected[:16]}…, got {actual[:16]}…",
+                action="Re-run later; if it persists, fetch the asset manually "
+                       "and verify before installing.")
+        new_version = ""
+        try:
+            with zipfile.ZipFile(pyz_tmp) as zf:
+                init = zf.read("rebel_profiler/__init__.py").decode("utf-8", "replace")
+            for line in init.splitlines():
+                if line.startswith("__version__"):
+                    new_version = line.split("=", 1)[1].strip().strip('"\'')
+                    break
+        except (KeyError, zipfile.BadZipFile):
+            pass
+        if expect_version and new_version and new_version == expect_version:
+            return {"updated": False, "reason": "already at the latest release",
+                    "version": new_version, "sha256": actual, "target": str(target)}
+        old_sha = _sha256_file(target)
+        os.replace(pyz_tmp, target)          # atomic — never a half-written tool
+        return {"updated": True, "version": new_version or "unknown",
+                "previous_sha256": old_sha,
+                "sha256": actual, "target": str(target),
+                "size": target.stat().st_size}
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 # ---------------------------------------------------------------------------
 # Self-check / self-repair (PDF 20)
 

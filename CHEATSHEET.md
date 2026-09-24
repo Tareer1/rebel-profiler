@@ -233,6 +233,11 @@ rebel-profiler intel attack-plan <case-id>      # ranked strategies from this ca
 rebel-profiler intel vuln-coverage <case-id>    # which vuln classes are probed vs blind spots
 rebel-profiler intel payload build <case-id> <payload-class>   # benign marker, no impact
 rebel-profiler intel payload deploy <case-id> <payload-id> --target <url> --approve
+rebel-profiler intel playbook list              # reviewed multi-step hunt recipes
+rebel-profiler intel playbook show web-audit
+rebel-profiler -y intel playbook run web-audit <case-id> <host> -p scheme http
+#   every step passes the six gates; -p overrides merge into steps that
+#   declare the key; add your own: <data-dir>/playbooks/*.json
 ```
 
 ## 4b. The sci-fi shell (`rebel-profiler shell`)
@@ -337,6 +342,9 @@ rebel-profiler ops backup <case-id> out.zip
 rebel-profiler ops restore out.zip dest/
 rebel-profiler ops check <case-id> --repair
 rebel-profiler ops package rebel-profiler.pyz   # offline zipapp
+rebel-profiler ops update                       # self-update the installed zipapp
+#   downloads the latest release, verifies the published sha256, and only
+#   then atomically replaces the .pyz — offline/mismatch = structured refusal
 rebel-profiler doctor
 ```
 
@@ -353,6 +361,8 @@ rebel-profiler bounty run <case-id>               # PLAN ONLY (default)
 rebel-profiler bounty run <case-id> --execute     # scope-enforced web audit
 rebel-profiler bounty assess <case-id>            # severity + CWE + repro + fix
 rebel-profiler bounty report <case-id> -o json    # submission-ready
+rebel-profiler bounty report <case-id> --fmt sarif     # SARIF 2.1.0 for code scanning
+rebel-profiler bounty report <case-id> --fmt markdown  # disclosure draft
 ```
 
 One stated goal runs the whole chain (scope → recon → assess → author →

@@ -503,6 +503,8 @@ def cmd_intel(ctx: AppContext, args: argparse.Namespace) -> int:
         return _cmd_intel_attack_plan(ctx, args)
     if args.intel_command == "vuln-coverage":
         return _cmd_intel_vuln_coverage(ctx, args)
+    if args.intel_command == "playbook":
+        return _cmd_intel_playbook(ctx, args)
     if args.intel_command == "payload":
         return _cmd_intel_payload(ctx, args)
     if args.intel_command == "fusion":
@@ -752,6 +754,74 @@ def _cmd_intel_attack_plan(ctx: AppContext, args: argparse.Namespace) -> int:
         human.append("  (no evidence yet — run intel collect / intel crawl first)")
     emit({"human": "\n".join(human), "data": plan}, args.output)
     return EXIT_SUCCESS
+
+
+def _cmd_intel_playbook(ctx: AppContext, args: argparse.Namespace) -> int:
+    """Hunt playbooks: reviewed multi-step recipes, expanded into gated plans."""
+    from ..intel.playbooks import expand_playbook, get_playbook, load_playbooks
+
+    if args.playbook_command == "list":
+        pbs = load_playbooks(ctx.data_dir)
+        rows = [{"name": p.name, "version": p.version, "source": p.source,
+                 "steps": len(p.steps), "description": p.description}
+                for p in pbs]
+        emit({"human": f"{len(rows)} playbook(s) — "
+                       f"run one: intel playbook run <name> <case-id> <target>",
+              "data": rows}, args.output)
+        return EXIT_SUCCESS
+    if args.playbook_command == "show":
+        pb = get_playbook(args.playbook_name, ctx.data_dir)
+        d = pb.as_dict()
+        human = [f"{pb.name} v{pb.version} ({pb.source}) — {pb.description}"]
+        for s in pb.steps:
+            human.append(f"  {s.rank}. {s.action} {s.params or ''}")
+            human.append(f"     why: {s.why}")
+        emit({"human": "\n".join(human), "data": d}, args.output)
+        return EXIT_SUCCESS
+    # run: validate → expand → execute each entry through the same collect
+    # pipeline (six gates, evidence, claims). A failed/skipped step is
+    # reported and the run continues to the next — the recipe is the plan,
+    # the gates stay the law.
+    pb = get_playbook(args.playbook_name, ctx.data_dir)
+    rec = ctx.find_case(args.case_id)
+    overrides = {k: v for k, v in (args.param or [])}
+    expansion = expand_playbook(pb, args.target)
+    if overrides:
+        # operator overrides (e.g. scheme=http) win over the recipe's params,
+        # merged into every step whose adapter declares the key
+        from ..execution.broker import AdapterRegistry
+        registry = AdapterRegistry()
+        for entry in expansion["entries"]:
+            adapter = registry.get(entry["action"])
+            allowed = set(adapter.allowed_params) if adapter else set()
+            for k, v in overrides.items():
+                if k in allowed:
+                    entry["params"][k] = v
+    if not expansion["entries"]:
+        raise UsageError(
+            f"Playbook '{pb.name}' has no executable steps",
+            reason="every step failed registry validation",
+            action="intel playbook show " + pb.name)
+    ran, failed = [], []
+    for entry in expansion["entries"]:
+        args.action = entry["action"]
+        args.target = entry["target"]
+        # -p uses append+nargs=2 → a list of [key, value] PAIRS, not flat
+        args.param = [[k, v] for k, v in entry["params"].items()]
+        args.reason = f"playbook:{pb.name}#{entry['rank']} — {entry['why']}"
+        result = cmd_intel_collect(ctx, args)
+        (ran if result == 0 else failed).append(
+            f"#{entry['rank']} {entry['action']}")
+    human = [f"Playbook {pb.name} v{pb.version} on {args.target}: "
+             f"{len(ran)} step(s) ran, {len(failed)} failed/skipped"]
+    for line in ran:
+        human.append(f"  ✓ {line}")
+    for line in failed:
+        human.append(f"  ✗ {line}")
+    emit({"human": "\n".join(human),
+          "data": {"playbook": pb.name, "ran": ran, "failed": failed}},
+         args.output)
+    return EXIT_SUCCESS if not failed else 1
 
 
 def _cmd_intel_payload(ctx: AppContext, args: argparse.Namespace) -> int:
@@ -1560,6 +1630,20 @@ def cmd_ops(ctx: AppContext, args: argparse.Namespace) -> int:
         record = ops.package_zipapp(root, Path(args.out))
         emit({"human": f"Zipapp: {record['zipapp']} (sha256 {record['sha256'][:16]}…)",
               "data": record}, args.output)
+        return EXIT_SUCCESS
+    if args.ops_command == "update":
+        import rebel_profiler
+
+        record = ops.update_zipapp(
+            Path(args.target), expect_version=rebel_profiler.__version__)
+        if record.get("updated"):
+            human = (f"Updated → v{record['version']} "
+                     f"(sha256 {record['sha256'][:16]}…, "
+                     f"{record['size']} bytes) at {record['target']}")
+        else:
+            human = f"No update: {record.get('reason', 'already current')} " \
+                    f"(v{record.get('version', '?')})"
+        emit({"human": human, "data": record}, args.output)
         return EXIT_SUCCESS
     if args.ops_command == "check":
         rec = ctx.find_case(args.case_id)
@@ -2565,7 +2649,19 @@ def cmd_bounty(ctx: AppContext, args: argparse.Namespace) -> int:
         try:
             ledger = ClaimLedger.load_from_db(db, rec["id"])
             report = assess(ledger, rec["id"], program=_case_program(db, rec["id"]))
-            emit({"human": report.render_human(), "data": report.as_dict()},
+            data = report.as_dict()
+            fmt = getattr(args, "report_format", "") or ""
+            if fmt == "sarif":
+                from ..intel.report_export import to_sarif
+
+                print(to_sarif(data))
+                return EXIT_SUCCESS if report.findings else 1
+            if fmt == "markdown":
+                from ..intel.report_export import to_markdown
+
+                print(to_markdown(data))
+                return EXIT_SUCCESS if report.findings else 1
+            emit({"human": report.render_human(), "data": data},
                  args.output)
             return EXIT_SUCCESS if report.findings else 1
         finally:
@@ -3227,6 +3323,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_ivc = intel_subs.add_parser("vuln-coverage", parents=[sub_common],
                                   help="vulnerability-class coverage matrix: what this case has probed vs blind spots")
     p_ivc.add_argument("case_id")
+    p_ipb = intel_subs.add_parser("playbook", parents=[sub_common],
+                                  help="hunt playbooks: reviewed multi-step recipes expanded into gated plans")
+    ipb_subs = p_ipb.add_subparsers(dest="playbook_command", required=True)
+    p_ipbl = ipb_subs.add_parser("list", parents=[sub_common], help="list builtin + operator playbooks")
+    p_ipbs = ipb_subs.add_parser("show", parents=[sub_common], help="show one playbook's steps")
+    p_ipbs.add_argument("playbook_name")
+    p_ipbr = ipb_subs.add_parser("run", parents=[sub_common],
+                                 help="run a playbook against one target in an active case (every step passes the six gates)")
+    p_ipbr.add_argument("playbook_name")
+    p_ipbr.add_argument("case_id")
+    p_ipbr.add_argument("target")
+    p_ipbr.add_argument("-p", "--param", action="append", nargs=2,
+                        metavar=("KEY", "VALUE"), default=[],
+                        help="params merged into every step that declares the key")
     p_ipay = intel_subs.add_parser("payload", parents=[sub_common],
                                    help="payload workbench: build benign impact-markers, deploy them through the approval-gated probe")
     ipay_subs = p_ipay.add_subparsers(dest="payload_command", required=True)
@@ -3416,6 +3526,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_opc = ops_subs.add_parser("check", parents=[sub_common], help="self-check + deterministic repair (PDF 20)")
     p_opc.add_argument("case_id")
     p_opc.add_argument("--repair", action="store_true", help="rebuild rebuildable views")
+    p_opu = ops_subs.add_parser("update", parents=[sub_common],
+                                help="self-update the installed zipapp from the latest release (sha256-verified)")
+    p_opu.add_argument("--target", default="~/.local/share/rebel-profiler/rebel-profiler.pyz",
+                       help="path to the installed .pyz (default: the --zipapp install location)")
 
     # worker (file-based job plane)
     p_wrk = subs.add_parser("worker", parents=[sub_common], help="file-based job plane: 3-way handshake with the daemon")
@@ -3714,9 +3828,14 @@ def build_parser() -> argparse.ArgumentParser:
                                     help="triage collected evidence into reportable "
                                          "findings with severity, CWE and reproduction")
     p_bassess.add_argument("case_id")
+    # the exporter formats ride a SEPARATE flag (--fmt) because argparse does
+    # not allow a subparser to widen the parent's -o choices in place
     p_breport = bounty_subs.add_parser("report", parents=[sub_common],
-                                       help="final submission-ready report (real evidence only)")
+                                       help="final submission-ready report (real evidence only; --fmt sarif|markdown for exporters)")
     p_breport.add_argument("case_id")
+    p_breport.add_argument("--fmt", dest="report_format", default="",
+                           choices=["sarif", "markdown"],
+                           help="export format: sarif = SARIF 2.1.0 (code scanning), markdown = disclosure draft")
     p_brun = bounty_subs.add_parser("run", parents=[sub_common],
                                     help="run the authorized check chain over every "
                                          "in-scope asset, then assess")
