@@ -252,3 +252,39 @@ evidence-free claims, scope always fail-closed, LLM proposes but never decides.
 - [x] Tests: shell helpers + piped loop, coverage-matrix honesty (every class
   has a live detect action and a buildable payload), header/sslscan parser
   shapes — suite green (947 passing)
+- [x] **Release engineering**: CI escalates DeprecationWarning/
+  PendingDeprecationWarning to errors in the stdlib job (the core can never
+  quietly lean on a dying API); v1.5.0 GitHub release ships the offline
+  zipapp + sha256 as assets; `install.sh --zipapp` installs from that asset
+  with checksum verification — no pip, no git, one file
+
+## Phase 12 — reach, distribution & hardening (planned)
+
+The engine is built; this phase is about putting it in more hands without
+weakening a single gate. Every item keeps the Phase 1 invariants.
+
+- [ ] **Zipapp self-update** (`ops update`): fetch the latest release asset,
+  verify its sha256 against the published checksum, atomically replace the
+  running zipapp; refused entirely when offline or when the checksum does
+  not match
+- [ ] **Post-quantum readiness review**: inventory every hash (SHA-256
+  evidence chains, HMAC audit signing) and key agreement surface against
+  the NIST PQC migration path; document what must change first
+- [ ] **Hunt playbooks**: named, versioned multi-step hunt recipes (YAML)
+  that expand into bounded agent plans — reviewed, scoped, and audited like
+  every other plan source
+- [ ] **Report export formats**: SARIF + Markdown renderers beside the
+  existing human/JSON bounty report so findings drop straight into triage
+  tooling and disclosure drafts
+- [ ] **Coverage-driven planning**: feed `intel vuln-coverage` blind spots
+  straight into the planner so "audit what you have not covered yet"
+  becomes the default next action, not a manual choice
+- [ ] **GUI hardening pass**: CSP headers + a strict origin check on the
+  local proxy, and a session-kill button that closes the gateway, proxy and
+  browser bridge together
+- [ ] **Windows/WSL support matrix**: doctor + adapters verified under WSL2
+  with the same Kali toolset, gaps documented honestly (some hunter
+  binaries have no Windows build)
+- [ ] **Localization**: CLI messages and docs in Urdu + English throughout,
+  starting with the human-mode strings (structure, exit codes and JSON
+  contracts stay language-neutral)

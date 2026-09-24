@@ -11,6 +11,11 @@ Every daily-use command in one page. Replace `<case-id>` with your case id
 pip install -e .                                # core (stdlib-only)
 rebel-profiler doctor                           # health check
 
+# No pip, no git? The offline single-file route:
+curl -LO https://github.com/Tareer1/rebel-profiler/releases/latest/download/rebel-profiler.pyz
+sha256sum -c rebel-profiler.pyz.sha256          # verify, then run:
+python3 rebel-profiler.pyz doctor               #  (or: ./scripts/install.sh --zipapp)
+
 # Local LLM engines — pick what fits your checkpoints (see docs/SETUP.md)
 pip install 'rebel-profiler[gguf]'              # GGUF files (llama.cpp/Ollama/LM Studio)
 pip install 'rebel-profiler[native]'            # HF safetensors already on disk

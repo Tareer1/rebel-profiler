@@ -23,12 +23,44 @@ die()  { printf '%s\n' "${RED} ✗${RESET} $*" >&2; exit 1; }
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CORE_ONLY=0
-[ "${1:-}" = "--core" ] && CORE_ONLY=1
+ZIPAPP_ONLY=0
+for arg in "$@"; do
+    case "${arg}" in
+        --core)   CORE_ONLY=1 ;;
+        --zipapp) ZIPAPP_ONLY=1 ;;
+        *) die "unknown option: ${arg} (supported: --core, --zipapp)" ;;
+    esac
+done
 BIN_DIR="${HOME}/.local/bin"
 VENV="${REPO}/.venv"
 
 command -v python3 >/dev/null || die "python3 not found — install Python 3.11+ first"
 mkdir -p "${BIN_DIR}"
+
+# --- 0. --zipapp: the pip-free offline route --------------------------------
+# Download the latest release zipapp, verify its published sha256, drop a
+# launcher on PATH. No venv, no pip, no git — one checksummed file.
+if [ "${ZIPAPP_ONLY}" = "1" ]; then
+    say "zipapp install (offline single-file)"
+    BASE="https://github.com/Tareer1/rebel-profiler/releases/latest/download"
+    TARGET="${HOME}/.local/share/rebel-profiler"
+    mkdir -p "${TARGET}"
+    curl -fL --retry 3 -o "${TARGET}/rebel-profiler.pyz" "${BASE}/rebel-profiler.pyz" \
+        || die "zipapp download failed — check your network or fetch it manually"
+    curl -fL --retry 3 -o "${TARGET}/rebel-profiler.pyz.sha256" "${BASE}/rebel-profiler.pyz.sha256" \
+        || die "checksum download failed — refusing to install unverified"
+    (cd "${TARGET}" && sha256sum -c rebel-profiler.pyz.sha256) \
+        || die "SHA-256 MISMATCH — the download is corrupt or tampered; nothing installed"
+    cat > "${BIN_DIR}/rebel-profiler" <<LAUNCHER
+#!/bin/sh
+exec python3 "${TARGET}/rebel-profiler.pyz" "\$@"
+LAUNCHER
+    chmod +x "${BIN_DIR}/rebel-profiler"
+    ok "zipapp verified + launcher at ${BIN_DIR}/rebel-profiler"
+    "${BIN_DIR}/rebel-profiler" doctor || true
+    printf '\n%s\n' "${BOLD}Done (zipapp mode).${RESET} Try:  ${BOLD}rebel-profiler doctor${RESET}"
+    exit 0
+fi
 
 # --- 1. venv + editable install ------------------------------------------
 say "python environment"

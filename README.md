@@ -36,10 +36,31 @@ and follows one non-negotiable design law:
 # rp/rp-mcp/rebel-profiler, advisory hunter toolset, hermes-agent MCP
 # wiring when present, doctor verdict):
 ./scripts/install.sh          # add --core to skip the hunter binaries
+                              # add --zipapp for the pip-free offline install
 
 # Or manually (Python 3.11+, stdlib-only core):
 pip install -e .
 rebel-profiler --help
+```
+
+### Offline single-file install (no pip, no git)
+
+Every release ships a self-contained zipapp — one Python file that runs on
+any box with Python 3.11+, no installation step at all:
+
+```bash
+# download the latest release assets
+curl -LO https://github.com/Tareer1/rebel-profiler/releases/latest/download/rebel-profiler.pyz
+curl -LO https://github.com/Tareer1/rebel-profiler/releases/latest/download/rebel-profiler.pyz.sha256
+sha256sum -c rebel-profiler.pyz.sha256        # MUST say OK
+
+# run it in place
+python3 rebel-profiler.pyz doctor
+python3 rebel-profiler.pyz --help
+
+# …or let the installer do all of the above: download, verify the
+# checksum, drop a `rebel-profiler` launcher on PATH
+./scripts/install.sh --zipapp
 ```
 
 No third-party runtime dependencies. Tests use `pytest` (dev-only).
