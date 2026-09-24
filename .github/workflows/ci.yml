@@ -47,8 +47,12 @@ jobs:
 
       # -rs prints the reasons for skips, so an engine quietly going missing
       # is visible in the log rather than silently reducing coverage.
+      # -W error turns every DeprecationWarning/PendingDeprecationWarning into
+      # a failure: the stdlib-only core must never lean on an API that is on
+      # its way out (argparse.FileType was the last one — this keeps it that
+      # way). Skips are unaffected; only warnings escalate.
       - name: Run full test suite
-        run: python -m pytest tests/ -q -rs
+        run: python -m pytest tests/ -q -rs -W error::DeprecationWarning -W error::PendingDeprecationWarning
 
       # The LLM plane must import and fall back to the tiny engine cleanly
       # on machines without airllm — exercise that contract explicitly.
@@ -115,6 +119,9 @@ jobs:
 
       # `-rs` makes it obvious if the engine tests are still skipping — that
       # would mean the dependencies did not land and this job proved nothing.
+      # Same warning-as-error pin as the stdlib job: third-party deprecation
+      # noise from torch/llama-cpp internals is NOT escalated (only the
+      # stdlib warnings our own code can control), so this stays a fair gate.
       - name: Full suite with real engine dependencies
         run: python -m pytest tests/ -q -rs
 

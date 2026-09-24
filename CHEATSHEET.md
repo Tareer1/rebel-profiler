@@ -388,6 +388,43 @@ subprocess sandbox decide whether it runs, and the run lands as hash-chained
 evidence. With no real engine loaded, authoring is skipped and said so — the
 deterministic half still reports.
 
+### 9b-i. H1 import → full audit in five commands (the fast path)
+
+```bash
+# 1. Export the program scope from HackerOne (JSON or CSV), then import it.
+#    The importer reads assets from `data[].attributes` and the eligibility
+#    flag from `eligible_for_submission` (also accepted: eligible /
+#    bounty_eligible / eligible_for_bounty). Ineligible assets become
+#    EXCLUSIONS; non-host assets are skipped with a stated reason.
+rebel-profiler case create "Acme Program" "imported from HackerOne"
+rebel-profiler bounty import <case-id> ~/Downloads/scope.json --program acme --activate
+
+# 2. Review exactly what got authorized before anything runs.
+rebel-profiler case scope show <case-id>
+
+# 3. Dry look: what WOULD be audited (plan only, nothing dispatched).
+rebel-profiler bounty run <case-id>
+
+# 4. One goal, whole chain: recon → assess → (author) → execute → report.
+#    --no-author keeps it deterministic (no LLM script writing).
+#    --scheme must match the program's reality (default https).
+rebel-profiler bounty auto <case-id> "audit this scope, report real results" \
+    --no-author --max-assets 10 --max-pages 20 --scheme https
+
+# 5. Triage + submission-ready report, then prove integrity.
+rebel-profiler bounty assess <case-id>
+rebel-profiler bounty report <case-id> -o json
+rebel-profiler evidence verify <case-id>      # exit 11 on ANY tamper
+```
+
+What you get per finding: advisory severity, CWE, a copy-paste repro command
+built from the URL the evidence actually came from, remediation, and the
+evidence id — an auditor can re-verify the whole chain independently.
+
+Blind spots first? `intel vuln-coverage <case-id>` (or `:cover` in the shell)
+shows which vulnerability classes this case has NOT probed yet, each with the
+exact command that would close the gap.
+
 ## 10. Job profiles (`--config-file`)
 
 Pin model/tier/actor settings once, reuse for every recurring job (cron,
