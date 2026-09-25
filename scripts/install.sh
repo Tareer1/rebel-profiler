@@ -90,7 +90,7 @@ if [ "${CORE_ONLY}" = "0" ]; then
     say "hunter toolset (apt where packaged)"
     if command -v apt-get >/dev/null; then
         # Distro-packaged hunters first; unknown names are skipped, not fatal.
-        APT_PKGS="nmap whois dnsutils whatweb wafw00f amass ffuf subfinder nuclei katana gau arjun naabu dalfox"
+        APT_PKGS="nmap whois dnsutils whatweb wafw00f amass ffuf subfinder nuclei katana gau arjun naabu dalfox nikto wpscan exploitdb tcpdump lynis sslscan enum4linux-ng dnsrecon seclists"
         WANT=""
         for p in ${APT_PKGS}; do
             command -v "${p}" >/dev/null || apt-cache show "${p}" >/dev/null 2>&1 && WANT="${WANT} ${p}"
