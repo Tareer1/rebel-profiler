@@ -283,6 +283,77 @@ RULES: tuple[Rule, ...] = (
         reproduce="lynis audit system --quick",
         impact="The operator's own baseline has a hardening gap.",
     ),
+    # ---- reverse-engineering plane (static, offline, analysis-only) ----
+    Rule(
+        prefix="binary_mitigation:disabled",
+        title="Binary shipped without exploit mitigation",
+        severity="low",
+        cwe="CWE-693",
+        remediation="Rebuild with NX, PIE, stack canaries and full RELRO "
+                    "enabled; note the gap in the advisory.",
+        reproduce="checksec --file=<sample>",
+        impact="Memory-corruption flaws in this binary are easier to exploit.",
+    ),
+    Rule(
+        prefix="binary_mitigation:enabled",
+        title="Binary mitigation present",
+        severity="informational",
+        cwe="CWE-693",
+        remediation="No action — recorded so the report states the posture "
+                    "factually.",
+        reproduce="checksec --file=<sample>",
+        impact="Mitigation evidence for the analysis write-up.",
+    ),
+    Rule(
+        prefix="string_url",
+        title="URL artifact inside analyzed sample",
+        severity="informational",
+        cwe="CWE-200",
+        remediation="Treat as an IOC candidate: verify reachability and "
+                    "reputation; never fetch it from an operator machine.",
+        reproduce="strings -n 6 <sample>",
+        impact="The sample references a network resource worth recording.",
+    ),
+    Rule(
+        prefix="string_ip",
+        title="Embedded IP address in sample",
+        severity="informational",
+        cwe="CWE-200",
+        remediation="Check the address against threat-intel sources; record "
+                    "as a potential C2/config artifact.",
+        reproduce="strings -n 6 <sample>",
+        impact="A hardcoded endpoint suggests network behavior.",
+    ),
+    Rule(
+        prefix="string_domain",
+        title="Embedded domain in sample",
+        severity="informational",
+        cwe="CWE-200",
+        remediation="Passive-check the domain (whois/DNS history); add to "
+                    "monitoring if it resolves.",
+        reproduce="strings -n 6 <sample>",
+        impact="A referenced domain may be infrastructure or a decoy.",
+    ),
+    Rule(
+        prefix="symbol_import",
+        title="Behavioral import observed (static)",
+        severity="informational",
+        cwe="CWE-200",
+        remediation="Note the capability hint (network/process/crypto) in the "
+                    "analysis; imports are hints, not proof of behavior.",
+        reproduce="nm -D <sample>",
+        impact="The sample imports an API worth calling out in the analysis.",
+    ),
+    Rule(
+        prefix="disasm_call",
+        title="Disassembled call to notable function",
+        severity="informational",
+        cwe="CWE-200",
+        remediation="Read the calling context before concluding anything; "
+                    "disassembly is reading, the sample never ran.",
+        reproduce="objdump -d <sample>",
+        impact="Static view of what the code references.",
+    ),
 )
 
 # Cleartext / over-exposed services seen in discovery output.

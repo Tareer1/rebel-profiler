@@ -232,6 +232,32 @@ _GROUPS: tuple[ToolGroup, ...] = (
         ),
     ),
     ToolGroup(
+        capability_class="binary_analysis",
+        risk="low",
+        tools=(
+            Tool("binary-info", "readelf", "binary_analysis", (),
+                 "ELF header & dynamic section: format, architecture, "
+                 "linked libraries, RUNPATH — the sample's identity card.",
+                 ("reverse_engineering", "malware")),
+            Tool("checksec", "checksec", "binary_analysis", (),
+                 "Compiled-in exploit mitigations (NX/PIE/canary/RELRO) of "
+                 "a possessed binary — factual posture evidence.",
+                 ("reverse_engineering", "attack_defense")),
+            Tool("string-dump", "strings", "binary_analysis", (),
+                 "Bounded printable-string extraction for IOC hunting: "
+                 "URLs, IPs, domains, paths, crypto hints.",
+                 ("reverse_engineering", "malware")),
+            Tool("symbol-dump", "nm", "binary_analysis", (),
+                 "Dynamic symbol/imports: behavioral hints (socket, execve, "
+                 "dlopen class) that focus the analysis.",
+                 ("reverse_engineering",)),
+            Tool("disasm", "objdump", "binary_analysis", (),
+                 "Disassembly of a named section: instructions read as data — "
+                 "the sample is never executed.",
+                 ("reverse_engineering",)),
+        ),
+    ),
+    ToolGroup(
         capability_class="exploit_validation",
         risk="critical",
         tools=(

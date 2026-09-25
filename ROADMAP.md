@@ -313,6 +313,18 @@ weakening a single gate. Every item keeps the Phase 1 invariants.
   `agent run --plan` payload; `agent run <case> "…" --coverage` runs it
   through the same planner validation and six gates; covered classes are
   never re-proposed and URL/host subject shape decides the target)
+- [x] **Reverse-engineering plane (45 gated actions, knowledge domain 16)**:
+  five static adapters — `binary-info` (readelf header/dynamic),
+  `checksec` (NX/PIE/canary/RELRO posture), `string-dump` (pattern-
+  classified IOC candidates), `symbol-dump` (nm imports/exports) and
+  `disasm` (objdump, bytes as data) — all offline reads of a POSSESSED
+  sample under the new `binary_analysis` capability class (risk: low);
+  `/proc`, `/sys`, `/dev` refused, no execution of the sample, no
+  network, no unpacking to runnable artifacts. Parsers turn unknown
+  input into no claims; bounty-assess rules cover mitigation gaps and
+  IOC candidates; knowledge domain 16 (Reverse Engineering & Binary
+  Analysis) ships 7 topics, 7 techniques and 13 glossary terms; the
+  `binary-triage` playbooks chain the whole chain
 - [x] **Kali tool expansion (40 gated actions)**: nikto (`nikto-scan`,
   polite CSV output), wpscan (`wpscan-audit`, version/plugin exposure —
   no brute force, no aggressive enumeration), searchsploit

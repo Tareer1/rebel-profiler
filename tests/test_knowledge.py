@@ -13,11 +13,12 @@ from rebel_profiler.knowledge import (
 )
 
 
-def test_fifteen_domains_present():
+def test_sixteen_domains_present():
+    """Domains 1-15 mirror the curriculum; 16 is the RE plane (added v1.6)."""
     domains = list_domains()
-    assert len(domains) == 15
+    assert len(domains) == 16
     numbers = [d["number"] for d in domains]
-    assert numbers == list(range(1, 16))
+    assert numbers == list(range(1, 17))
 
 
 def test_domain_lookup_by_key_and_number():

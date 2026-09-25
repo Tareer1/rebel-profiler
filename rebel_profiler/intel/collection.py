@@ -751,6 +751,189 @@ def _parse_tcpdump_summary(stdout: str) -> list[tuple[str, str]]:
             for k, v in sorted(counts.items())][:30]
 
 
+def _parse_checksec(stdout: str) -> list[tuple[str, str]]:
+    """checksec --file= output: 'CANARY	true'-style mitigation rows.
+
+    Each ENABLED/DISABLED mitigation becomes one claim so the report can
+    state the binary's exploit-prevention posture factually.
+    """
+    pairs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        m = re.match(r"^([A-Za-z][A-Za-z0-9 _-]{1,30}?)\s*[:|=]\s*"
+                     r"(Canary|NX|PIE|RELRO| fortify|no fortify|FORTIFY)?"
+                     r"\s*(enabled|disabled|yes|no|true|false|full|partial|"
+                     r"no relro|partial relro|full relro|nx enabled|nx disabled)",
+                     line, re.IGNORECASE)
+        if m:
+            name = m.group(1).strip().lower().replace(" ", "_")
+            value = m.group(3).lower()
+            key = f"{name}={value}"
+            if key in seen:
+                continue
+            seen.add(key)
+            pairs.append(("binary_mitigation", key))
+            continue
+        low = line.lower()
+        for mitigation in ("canary", "nx", "pie", "relro", "fortify"):
+            if mitigation in low and ("enabled" in low or "disabled" in low
+                                      or "relro" in low):
+                state = "disabled" if ("disabled" in low or "no " + mitigation in low) \
+                    else "enabled"
+                key = f"{mitigation}={state}"
+                if key not in seen:
+                    seen.add(key)
+                    pairs.append(("binary_mitigation", key))
+                break
+    return pairs[:20]
+
+
+def _parse_binary_info(stdout: str) -> list[tuple[str, str]]:
+    """readelf -h -d: header class/machine/type + needed libraries.
+
+    Identity card of the sample: what it is, what it links against.
+    """
+    pairs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        m = re.match(r"^Class:\s*(.+)$", line)
+        if m:
+            pairs.append(("binary_class", m.group(1).strip()[:60]))
+            continue
+        m = re.match(r"^Machine:\s*(.+)$", line)
+        if m:
+            pairs.append(("binary_arch", m.group(1).strip()[:80]))
+            continue
+        m = re.match(r"^Type:\s*(.+)$", line)
+        if m:
+            pairs.append(("binary_type", m.group(1).strip()[:60]))
+            continue
+        m = re.match(r"^\s*NEEDED\s+(?:Shared library:\s*)?\[?(.+?)\]?\s*$", line)
+        if m:
+            lib = m.group(1).strip()[:120]
+            key = f"lib:{lib.lower()}"
+            if lib and key not in seen:
+                seen.add(key)
+                pairs.append(("binary_library", lib))
+        m = re.match(r"^\s*(RUNPATH|RPATH)\s+\[?(.+?)\]?\s*$", line)
+        if m:
+            pairs.append(("binary_runpath", m.group(2).strip()[:200]))
+    # dedupe, keep order, bounded
+    out, seen2 = [], set()
+    for kind, value in pairs:
+        key = (kind, value.lower())
+        if key in seen2:
+            continue
+        seen2.add(key)
+        out.append((kind, value))
+    return out[:40]
+
+
+def _parse_strings(stdout: str, *, max_claims: int = 60) -> list[tuple[str, str]]:
+    """Printable strings → IOC-candidate claims, pattern-classified.
+
+    Full string dumps would flood the ledger; the parser keeps only
+    strings that LOOK like artifacts (URLs, IPs, domains, file paths,
+    registry keys, base64-ish blobs) and caps the count. Everything else
+    is noise and never becomes a claim.
+    """
+    patterns = (
+        ("string_url", re.compile(r"(?:https?|ftp)://[A-Za-z0-9./_?&=%~-]{4,120}")),
+        ("string_ip", re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")),
+        ("string_domain", re.compile(r"\b[A-Za-z0-9][A-Za-z0-9-]{1,40}\.(?:com|net|org|io|ru|cn|xyz|top|info|biz)(?:\.[a-z]{2,3})?\b")),
+        ("string_path", re.compile(r"(?:/[A-Za-z0-9._-]{2,30}){2,}|[A-Z]:\\\\[A-Za-z0-9._\\-]{2,60}")),
+        ("string_regkey", re.compile(r"HKEY_[A-Z_]+\\\\[A-Za-z0-9_\\-]{2,60}")),
+        ("string_crypto", re.compile(r"(?:AES|RSA|DES|RC4|base64|md5|sha1|sha256|Crypt(?:Encrypt|Decrypt))", re.IGNORECASE)),
+    )
+    pairs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for raw in stdout.splitlines():
+        if len(pairs) >= max_claims:
+            break
+        s = raw.strip()
+        if len(s) < 6:
+            continue
+        for kind, pattern in patterns:
+            m = pattern.search(s)
+            if m:
+                value = m.group(0)[:160]
+                key = value.lower()
+                if key not in seen:
+                    seen.add(key)
+                    pairs.append((kind, value))
+                break
+    return pairs
+
+
+def _parse_symbols(stdout: str, *, max_claims: int = 40) -> list[tuple[str, str]]:
+    """nm -D output: undefined imports are the behavioral hints.
+
+    Only interesting imports (network, process, crypto, dynamic code) and
+    the exported symbol count become claims — the full table is noise.
+    """
+    interesting = re.compile(
+        r"\b(socket|connect|bind|listen|accept|send|recv|execve?|system|fork|"
+        r"popen|dlopen|dlsym|mmap|crypt|encrypt|decrypt|CreateProcess|"
+        r"WinExec|URLDownload|InternetOpen|VirtualAlloc|WriteProcessMemory)\b",
+        re.IGNORECASE)
+    exports = 0
+    pairs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for line in stdout.splitlines():
+        parts = line.strip().split()
+        if not parts:
+            continue
+        symbol = parts[-1]
+        if len(parts) >= 2 and parts[0].upper() in {"U", "W"}:
+            kind = "symbol_import"
+        elif symbol and not line.strip().startswith(("//", "nm:")):
+            exports += 1
+            kind = ""
+        else:
+            kind = ""
+        if kind and symbol and symbol.lower() not in seen:
+            if interesting.search(symbol):
+                seen.add(symbol.lower())
+                pairs.append((kind, symbol[:120]))
+    if exports:
+        pairs.insert(0, ("symbol_exports", f"{exports} exported symbols"))
+    return pairs[:max_claims]
+
+
+def _parse_disasm(stdout: str) -> list[tuple[str, str]]:
+    """objdump disassembly → section-level observations, not instruction dumps.
+
+    Calls to interesting libc functions and the instruction count become
+    claims; individual instructions stay in evidence, never in the ledger.
+    """
+    calls: list[str] = []
+    instructions = 0
+    for line in stdout.splitlines():
+        if ">:" in line and line.strip().endswith(":"):
+            continue
+        if re.search(r"\bcall\b", line):
+            m = re.search(r"call.*<([^>]+)>", line)
+            if m:
+                calls.append(m.group(1).strip()[:100])
+        elif re.search(r"\b(mov|push|pop|lea|jmp|jne|je|ret|test|cmp|xor)\b", line):
+            instructions += 1
+    pairs: list[tuple[str, str]] = []
+    if instructions:
+        pairs.append(("disasm_summary", f"{instructions} instructions disassembled"))
+    seen: set[str] = set()
+    for call in calls[:20]:
+        if call.lower() not in seen:
+            seen.add(call.lower())
+            pairs.append(("disasm_call", call))
+    return pairs[:30]
+
+
 def _parse_lynis(stdout: str) -> list[tuple[str, str]]:
     """lynis audit system: 'suggestion[]' lines are the hardening gaps.
 
@@ -1111,6 +1294,16 @@ class CollectionPipeline:
             pairs = _parse_tcpdump_summary(stdout)
         elif effective_action == "host-audit":
             pairs = _parse_lynis(stdout)
+        elif effective_action == "checksec":
+            pairs = _parse_checksec(stdout)
+        elif effective_action == "binary-info":
+            pairs = _parse_binary_info(stdout)
+        elif effective_action == "string-dump":
+            pairs = _parse_strings(stdout)
+        elif effective_action == "symbol-dump":
+            pairs = _parse_symbols(stdout)
+        elif effective_action == "disasm":
+            pairs = _parse_disasm(stdout)
         elif effective_action == "header-audit":
             pairs = _parse_header_head(stdout)
         elif effective_action == "tls-posture":
@@ -1196,6 +1389,11 @@ class CollectionPipeline:
             "exploit-lookup": "db.exploit",
             "packet-capture": "sniff.local",
             "host-audit": "audit.lynis",
+            "checksec": "binary.static",
+            "binary-info": "binary.static",
+            "string-dump": "binary.static",
+            "symbol-dump": "binary.static",
+            "disasm": "binary.static",
             "header-audit": "scan.web",
             "tls-posture": "scan.tls",
             "wlan-survey": "scan.wireless",

@@ -3093,6 +3093,16 @@ def cmd_doctor(ctx: AppContext, args: argparse.Namespace) -> int:
                    else f"optional, missing: {', '.join(hunter_missing)} "
                         "(sudo apt install " + " ".join(hunter_missing) + ")"),
     })
+    re_missing = [b for b in ("readelf", "strings", "nm", "objdump", "checksec")
+                  if shutil.which(b) is None]
+    checks.append({
+        "check": "reverse-engineering toolset",
+        "ok": "yes",
+        "detail": ("all 5 RE binaries available" if not re_missing
+                   else f"optional, missing: {', '.join(re_missing)} "
+                        "(sudo apt install binutils "
+                        + " ".join(re_missing) + ")"),
+    })
     # Optional LLM engines are informational: the deterministic tiny engine
     # always exists, so a missing optional dependency is never a failure.
     for module, label in (("llama_cpp", "llm engine: gguf (llama-cpp-python)"),

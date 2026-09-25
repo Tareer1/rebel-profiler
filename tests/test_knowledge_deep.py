@@ -26,7 +26,7 @@ from rebel_profiler.cli.main import main
 class TestTechniques:
     def test_all_fifteen_domains_covered(self):
         domain_keys = {dt.domain_key for dt in TECHNIQUES}
-        assert len(domain_keys) == 15
+        assert len(domain_keys) == 16
 
     def test_every_technique_has_fields(self):
         for _domain, t in all_techniques():
@@ -34,8 +34,8 @@ class TestTechniques:
             assert t.capability_class in {
                 "info", "passive_recon", "osint", "discovery", "network_mapping",
                 "web_assessment", "config_assessment", "active_recon",
-                "vuln_validation", "intrusive_testing", "exploit_validation",
-                "destructive",
+                "binary_analysis", "vuln_validation", "intrusive_testing",
+                "exploit_validation", "destructive",
             }
             assert len(t.countermeasure) > 10
 
@@ -117,7 +117,8 @@ class TestPlaybooks:
         valid = {
             "info", "passive_recon", "osint", "discovery", "network_mapping",
             "web_assessment", "config_assessment", "active_recon",
-            "vuln_validation", "intrusive_testing", "exploit_validation",
+            "binary_analysis", "vuln_validation", "intrusive_testing",
+            "exploit_validation",
         }
         for pb in PLAYBOOKS:
             for s in pb.steps:
@@ -164,9 +165,9 @@ class TestDeepPlannerContext:
     def test_schema_v3_complete(self):
         ctx = deep_planner_context()
         assert ctx["schema_version"] == 3
-        assert len(ctx["domains"]) == 15
-        assert len(ctx["tool_matrix"]) == 9
-        assert len(ctx["techniques"]) == 15
+        assert len(ctx["domains"]) == 16
+        assert len(ctx["tool_matrix"]) == 10
+        assert len(ctx["techniques"]) == 16
         assert ctx["playbooks"]
         assert len(ctx["glossary"]) >= 45
         # action guides: every live action must be covered in the bundle
@@ -283,7 +284,7 @@ class TestKnowledgeCLI:
 
         payload = json.loads(capsys.readouterr().out)
         assert payload["schema_version"] == 3
-        assert len(payload["domains"]) == 15
+        assert len(payload["domains"]) == 16
         assert payload["action_guides"]
 
     @pytest.fixture(autouse=True)

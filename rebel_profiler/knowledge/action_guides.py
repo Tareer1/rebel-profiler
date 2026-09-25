@@ -649,6 +649,89 @@ _ACTION_GUIDES: tuple[ActionGuide, ...] = (
         next_steps=("service-detect", "port-scan"),
     ),
     ActionGuide(
+        action="checksec",
+        capability_class="binary_analysis",
+        when=("You need the exploit-mitigation posture (NX/PIE/canary/RELRO) "
+              "of a binary ALREADY in the case evidence — shipped software "
+              "or a captured sample. Offline read; nothing executes."),
+        target_shape="an absolute or relative path to the sample file",
+        target_example="/srv/samples/app.bin",
+        example={"action": "checksec", "target": "/srv/samples/app.bin"},
+        output_claims=("binary_mitigation",),
+        reads_output=("Each mitigation row becomes a binary_mitigation claim "
+                      "(name=state). Missing mitigations are reportable "
+                      "posture gaps, not exploits — nothing is built from them."),
+        next_steps=("binary-info", "string-dump"),
+    ),
+    ActionGuide(
+        action="binary-info",
+        capability_class="binary_analysis",
+        when=("You want the sample's identity card: format, class, "
+              "architecture, linked libraries and RUNPATH. The first read "
+              "after hashing; offline, bytes as data."),
+        target_shape="an absolute or relative path to the sample file",
+        target_example="/srv/samples/app.bin",
+        example={"action": "binary-info", "target": "/srv/samples/app.bin"},
+        output_claims=("binary_class", "binary_arch", "binary_type",
+                       "binary_library", "binary_runpath"),
+        reads_output=("Header fields become typed identity claims; NEEDED "
+                      "libraries become binary_library claims. Unusual "
+                      "RUNPATH values are worth noting in the analysis."),
+        next_steps=("checksec", "symbol-dump", "string-dump"),
+    ),
+    ActionGuide(
+        action="string-dump",
+        capability_class="binary_analysis",
+        when=("You want IOC candidates from a possessed sample: embedded "
+              "URLs, IPs, domains, paths, registry keys and crypto hints. "
+              "The parser keeps only artifact-shaped strings, capped."),
+        target_shape="an absolute or relative path to the sample file",
+        target_example="/srv/samples/app.bin",
+        params=(("max_lines", "20-5000 strings the PARSER may turn into "
+                 "claims (default 400)"),),
+        example={"action": "string-dump", "target": "/srv/samples/app.bin",
+                 "params": {"max_lines": "400"}},
+        output_claims=("string_url", "string_ip", "string_domain",
+                       "string_path", "string_regkey", "string_crypto"),
+        reads_output=("Pattern-classified candidates only — random text never "
+                      "becomes a claim. Treat every value as an IOC CANDIDATE: "
+                      "verify passively (whois, threat intel), never fetch it."),
+        next_steps=("whois-lookup", "dns-lookup"),
+    ),
+    ActionGuide(
+        action="symbol-dump",
+        capability_class="binary_analysis",
+        when=("You want what a sample imports and exports: socket/connect/"
+              "execve/dlopen-class imports are behavioral hints that decide "
+              "where to disassemble next."),
+        target_shape="an absolute or relative path to the sample file",
+        target_example="/srv/samples/app.bin",
+        params=(("defined_only", "1 to list only defined symbols"),),
+        example={"action": "symbol-dump", "target": "/srv/samples/app.bin"},
+        output_claims=("symbol_import", "symbol_exports"),
+        reads_output=("Only interesting imports become claims (network, "
+                      "process, crypto, dynamic-code); the export count is "
+                      "summarized. Imports are hints, never proof."),
+        next_steps=("disasm",),
+    ),
+    ActionGuide(
+        action="disasm",
+        capability_class="binary_analysis",
+        when=("You need to READ what a specific section of a possessed "
+              "sample does: objdump decodes the instruction bytes as data. "
+              "The disassembler never executes the sample."),
+        target_shape="an absolute or relative path to the sample file",
+        target_example="/srv/samples/app.bin",
+        params=(("section", "section name to disassemble, e.g. .text or .plt"),),
+        example={"action": "disasm", "target": "/srv/samples/app.bin",
+                 "params": {"section": ".text"}},
+        output_claims=("disasm_summary", "disasm_call"),
+        reads_output=("Instruction COUNT and notable CALL targets become "
+                      "claims; individual instructions stay in evidence. Read "
+                      "the calling context before concluding anything."),
+        next_steps=("string-dump", "symbol-dump"),
+    ),
+    ActionGuide(
         action="host-audit",
         capability_class="config_assessment",
         when=("You want the hardening baseline of the OPERATOR'S OWN machine "

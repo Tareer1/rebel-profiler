@@ -326,7 +326,7 @@ pdf.ln(2)
 
 planes = [
     ("Intelligence Plane", "knowledge/  +  intel/",
-     "15 domains, 81 topics, 109 techniques, 121 glossary terms. Capability classes, Kali tool map, and planner context. Source scoring (admiralty-style A-E grades, 30-day freshness half-life, independence), claim ledger with computed confidence, entity resolution, injection defense, collection pipeline, findings/report generator, cross-domain fusion (noisy-OR corroboration, contradiction engine), persistent relationship graph store (SQLite v3 tables), surface graph, program scope import (bug-bounty CSV/JSON -> ordinary scope entries), bounty triage (claim ledger -> severity/CWE/repro), and the full bounty session (one goal -> scope/recon/assess/author/execute/repair/report, each stage bounded and evidenced). Emits planner context; contains no authority of any kind."),
+     "16 domains, 88 topics, 116 techniques, 133 glossary terms. Capability classes, Kali tool map, and planner context. Source scoring (admiralty-style A-E grades, 30-day freshness half-life, independence), claim ledger with computed confidence, entity resolution, injection defense, collection pipeline, findings/report generator, cross-domain fusion (noisy-OR corroboration, contradiction engine), persistent relationship graph store (SQLite v3 tables), surface graph, program scope import (bug-bounty CSV/JSON -> ordinary scope entries), bounty triage (claim ledger -> severity/CWE/repro), and the full bounty session (one goal -> scope/recon/assess/author/execute/repair/report, each stage bounded and evidenced). Emits planner context; contains no authority of any kind."),
     ("Agent Plane", "agent/",
      "Goal -> planner proposals -> broker gates -> claims -> report. The planner sees only declared actions and params (PlannerView). Denials come back as feedback, not failures. Sessions are capped (--max-turns, default 8) and every executed call is hash-chained evidence. Ships with a deterministic passive-first planner today; any LLM can plug in by emitting the same Proposal objects. This is the 10x lever: the operator states a goal, the harness does the chained work in minutes with every step audited."),
     ("LLM Plane (Planner)", "llm/",
@@ -875,13 +875,13 @@ pdf.body(
 )
 pdf.ln(1)
 pdf.code(
-    "rebel-profiler knowledge domains                # list all 15 domains\n"
+    "rebel-profiler knowledge domains                # list all 16 domains\n"
     "rebel-profiler knowledge search \"zone transfer\"  # find topics by keyword\n"
     "rebel-profiler knowledge tools scanning          # Kali tools mapped to capabilities\n"
     "rebel-profiler knowledge planner-context --output json  # machine-readable context"
 )
 pdf.ln(2)
-pdf.body("The 15 domains:")
+pdf.body("The 16 domains:")
 pdf.ln(1)
 domains = [
     "1.  Foundations", "2.  Networking", "3.  Security fundamentals",
@@ -1160,7 +1160,7 @@ pdf.code(
     "  |   |   (LLM plane: 5 engines, AirLLM-mode, script authoring, daemon)\n"
     "  |   |   ...\n"
     "  |   knowledge/\n"
-    "  |   |   15 domains, 81 topics, 109 techniques, 121 glossary terms\n"
+    "  |   |   16 domains, 88 topics, 116 techniques, 133 glossary terms\n"
     "  |   |   capability classes, Kali tool map, planner context\n"
     "  |   |   ...\n"
     "  |   storage/\n"
@@ -1429,7 +1429,7 @@ pdf.code(
     "Task: collect intel, build claims, fuse across sources, surface graph\n"
     "  -> intel/              (claims.py, sources.py, fusion.py, collection.py, crawl.py,\n"
     "                          injection.py)\n"
-    "  -> knowledge/          (15 domains, topics, techniques, glossary, capability classes)\n"
+    "  -> knowledge/          (16 domains, topics, techniques, glossary, capability classes)\n"
     "  -> storage/            (SQLite per case, graph tables)\n"
     "\n"
     "Task: bug-bounty workflow, bounty auto, scope import\n"

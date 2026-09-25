@@ -237,6 +237,12 @@ def _default_adapter_classes() -> tuple[type[Adapter], ...]:
         classes.extend(TOOL_EXEC_ADAPTERS)
     except ImportError:  # pragma: no cover
         pass
+    try:
+        from .re import RE_ADAPTERS
+
+        classes.extend(RE_ADAPTERS)
+    except ImportError:  # pragma: no cover
+        pass
     return tuple(classes)
 
 

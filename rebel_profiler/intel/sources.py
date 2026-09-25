@@ -118,6 +118,7 @@ DEFAULT_SOURCES: tuple[Source, ...] = (
     Source("db.exploit", "db", "b2", 1.0, "local Exploit-DB mirror", "offline advisory database; proves publication, not exploitability"),
     Source("sniff.local", "sniff", "b2", 1.0, "own-interface capture", "protocol aggregate from the operator's own segment (listen-only)"),
     Source("audit.lynis", "audit", "a1", 1.0, "local hardening audit", "lynis results from the operator's own machine"),
+    Source("binary.static", "static", "a1", 1.0, "static analysis of an evidence sample", "offline read of a possessed file; bytes as data, never executed"),
     Source("scan.tool", "scan", "b2", 1.0, "whitelisted tool", "exec-tool run through the broker"),
     Source("scan.web", "scan", "b2", 0.9, "web-layer tool", "whatweb/wafw00f/ffuf/probe view of the web origin"),
     Source("scan.wireless", "scan", "b2", 0.9, "RF observation", "airodump-ng CSV view of the 2.4/5 GHz band (authorized site)"),

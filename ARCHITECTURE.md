@@ -11,7 +11,7 @@ specification (PDF 2), with one guiding constraint repeated throughout:
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │ Intelligence plane          knowledge/ + intel/                  │
-│   15 domains · 81 topics · 109 techniques · 121 glossary terms    │
+│   16 domains · 88 topics · 116 techniques · 133 glossary terms    │
 │   capability classes · Kali tool map · planner context            │
 │   Source scoring · claim ledger · entity resolution · injection   │
 │   defense · collection pipeline · findings/report generator ·     │

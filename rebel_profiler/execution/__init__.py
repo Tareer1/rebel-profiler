@@ -7,6 +7,14 @@ from .discovery import (
     ServiceDetectAdapter,
 )
 from .tool_exec import TOOL_EXEC_ADAPTERS, ToolExecAdapter
+from .re import (
+    RE_ADAPTERS,
+    BinaryInfoAdapter,
+    ChecksecAdapter,
+    DisasmAdapter,
+    StringDumpAdapter,
+    SymbolDumpAdapter,
+)
 from .hunters import (
     ArjunAdapter,
     GauAdapter,
@@ -58,6 +66,12 @@ __all__ = [
     "PortScanAdapter",
     "ServiceDetectAdapter",
     "TOOL_EXEC_ADAPTERS",
+    "RE_ADAPTERS",
+    "BinaryInfoAdapter",
+    "ChecksecAdapter",
+    "DisasmAdapter",
+    "StringDumpAdapter",
+    "SymbolDumpAdapter",
     "ToolExecAdapter",
     "Adapter",
     "AdapterRegistry",

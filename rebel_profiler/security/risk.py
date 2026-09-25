@@ -25,6 +25,10 @@ _CAPABILITY_RISK = {
     # Monitor-mode transition changes the OPERATOR'S OWN machine state, so
     # it deliberately sits above observation and needs an approval.
     "wireless_monitor": "high",
+    # Static/offline analysis of files already in evidence: the binary is
+    # dissected on the operator's own machine — no target is contacted and
+    # nothing is executed. Analysis-only by contract (see execution/re.py).
+    "binary_analysis": "low",
     "active_recon": "high",
     "vuln_validation": "high",
     "intrusive_testing": "high",

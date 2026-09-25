@@ -199,6 +199,20 @@ def builtin_playbooks() -> tuple[Playbook, ...]:
                ("packet-capture", {"interface": "eth0", "filter": "tcp", "count": "300"},
                 "protocol aggregates on the own segment: cleartext stands out"),
            ]),
+        pb("binary-triage", "1", "Static binary triage (offline RE, analysis-only)",
+           "rebel-profiler core", ["reverse_engineering", "malware"], [
+               ("binary-info", {},
+                "identity card: format, architecture, linked libraries (pass "
+                "the sample path as target)"),
+               ("checksec", {},
+                "exploit-mitigation posture: NX/PIE/canary/RELRO states"),
+               ("string-dump", {},
+                "pattern-classified IOC candidates: URLs, IPs, domains, paths"),
+               ("symbol-dump", {},
+                "imports & exports: socket/execve/dlopen-class hints"),
+               ("disasm", {"section": ".text"},
+                "read the calls in the focus section — bytes as data, never run"),
+           ]),
     )
 
 

@@ -116,7 +116,7 @@ class TestKnowledgeCommands:
     def test_planner_context_json(self, workspace, capsys):
         assert main([*workspace, "knowledge", "planner-context", "-o", "json"]) == 0
         payload = json.loads(capsys.readouterr().out)
-        assert len(payload["domains"]) == 15
+        assert len(payload["domains"]) == 16
 
     def test_tools_for_domain(self, workspace, capsys):
         assert main([*workspace, "knowledge", "tools", "scanning"]) == 0

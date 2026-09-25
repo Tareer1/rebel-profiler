@@ -907,6 +907,62 @@ TECHNIQUES: tuple[DomainTechniques, ...] = (
             ),
         ),
     ),
+    DomainTechniques(
+        domain_key="reverse_engineering",
+        techniques=(
+            Technique(
+                key="sample_acquisition_hashing",
+                name="Sample acquisition, hashing & chain of custody",
+                capability_class="info",
+                kali_tools=(),
+                countermeasure="Evidence hashing at ingest; custody records for every copy.",
+                notes="Always first: unhashed samples are analytically and legally worthless.",
+            ),
+            Technique(
+                key="file_format_identification",
+                name="File/format identification (ELF/PE headers, linked libs)",
+                capability_class="binary_analysis",
+                kali_tools=("readelf", "file"),
+                countermeasure="SBoM tracking; flag unknown binary formats in the estate.",
+            ),
+            Technique(
+                key="mitigation_posture_review",
+                name="Exploit-mitigation posture review (NX/PIE/canary/RELRO)",
+                capability_class="binary_analysis",
+                kali_tools=("checksec",),
+                countermeasure="Build-time hardening gates; CI fails on mitigation regression.",
+            ),
+            Technique(
+                key="string_artifact_extraction",
+                name="String & artifact extraction (IOC candidates)",
+                capability_class="binary_analysis",
+                kali_tools=("strings",),
+                countermeasure="IOC monitoring; threat-intel correlation on extracted artifacts.",
+            ),
+            Technique(
+                key="symbol_import_review",
+                name="Symbol & dynamic-import review (behavioral hints)",
+                capability_class="binary_analysis",
+                kali_tools=("nm",),
+                countermeasure="Application allow-listing; import review on shipped code.",
+            ),
+            Technique(
+                key="static_disassembly",
+                name="Controlled disassembly & call-context reading",
+                capability_class="binary_analysis",
+                kali_tools=("objdump", "radare2"),
+                countermeasure="Findings feed detection logic and incident response.",
+                notes="Reading, not running: disassembly never executes the sample.",
+            ),
+            Technique(
+                key="detonation_boundary",
+                name="Detonation boundary & sandbox handoff decision",
+                capability_class="info",
+                kali_tools=(),
+                countermeasure="Detonation only in isolated external sandboxes; never on workstations.",
+            ),
+        ),
+    ),
 )
 
 

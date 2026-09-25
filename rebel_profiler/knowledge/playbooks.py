@@ -33,6 +33,32 @@ class Playbook:
 
 PLAYBOOKS: tuple[Playbook, ...] = (
     Playbook(
+        key="binary_triage",
+        title="Static Binary Triage (offline, analysis-only)",
+        objective=(
+            "Understand a possessed sample without executing it: identify, "
+            "check mitigations, extract IOC candidates, read imports and "
+            "calls — every step an offline read, the sample never runs."
+        ),
+        domain_keys=("reverse_engineering", "malware"),
+        steps=(
+            PlaybookStep(1, "Confirm custody: hash & register the sample", "info", "",
+                         "Authorization sign-off precedes analysis; SHA-256 at ingest via the evidence store records custody."),
+            PlaybookStep(2, "Identify format & architecture", "binary_analysis", "binary-info",
+                         "ELF/PE header, class, machine, linked libraries, RUNPATH."),
+            PlaybookStep(3, "Read the mitigation posture", "binary_analysis", "checksec",
+                         "NX/PIE/canary/RELRO — factual posture for the report."),
+            PlaybookStep(4, "Extract IOC candidates", "binary_analysis", "string-dump",
+                         "Pattern-classified strings: URLs, IPs, domains, paths."),
+            PlaybookStep(5, "Review imports", "binary_analysis", "symbol-dump",
+                         "socket/execve/dlopen-class imports hint at behavior."),
+            PlaybookStep(6, "Disassemble the focus area", "binary_analysis", "disasm",
+                         "Read the calls around the imported APIs — reading, never running."),
+            PlaybookStep(7, "Correlate & report", "info", "",
+                         "Verify IOC candidates passively (whois, DNS, threat intel); write the analysis."),
+        ),
+    ),
+    Playbook(
         key="authorized_recon",
         title="Authorized Reconnaissance (Passive-First)",
         objective=(

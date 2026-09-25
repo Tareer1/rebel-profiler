@@ -1351,6 +1351,116 @@ DOMAINS: tuple[KnowledgeDomain, ...] = (
             ),
         ),
     ),
+    KnowledgeDomain(
+        key="reverse_engineering",
+        number=16,
+        title="Reverse Engineering & Binary Analysis",
+        objective=(
+            "Understand what a possessed binary or firmware sample does by "
+            "reading it — statically, offline, without executing anything — "
+            "so analysis is lawful by construction and the sample never "
+            "touches production systems."
+        ),
+        topics=(
+            Topic(
+                key="re_lifecycle",
+                title="The Static-First RE Lifecycle",
+                capability_class="info",
+                summary=(
+                    "Legal & safe analysis order: acquire and hash the sample "
+                    "(chain of custody), identify type/architecture, read "
+                    "strings and imports for behavioral hints, disassemble "
+                    "specific functions for confirmation, and only ever "
+                    "detonate in isolated external infrastructure. The sample "
+                    "is data — it never runs on the analyst's machine."
+                ),
+                defensive=(
+                    "The same artifacts (strings, imports, mitigations) are "
+                    "what defenders extract to build detections and YARA rules."
+                ),
+                keywords=("reverse engineering", "static analysis", "lifecycle", "chain of custody"),
+            ),
+            Topic(
+                key="file_identification",
+                title="File & Format Identification (ELF/PE/Mach-O)",
+                capability_class="binary_analysis",
+                summary=(
+                    "Header parsing gives the identity card: format, class "
+                    "(32/64-bit), architecture, entry point, and the dynamic "
+                    "section's linked libraries and RUNPATH. readelf-style "
+                    "reads turn 'some binary' into a typed, comparable sample."
+                ),
+                defensive="Maintain a software bill of materials; unknown formats in the estate are a review trigger.",
+                keywords=("elf", "pe", "header", "readelf", "architecture"),
+            ),
+            Topic(
+                key="mitigation_review",
+                title="Exploit-Mitigation Posture (NX/PIE/Canary/RELRO)",
+                capability_class="binary_analysis",
+                summary=(
+                    "checksec-class reads of a shipped binary show which "
+                    "exploit mitigations were compiled in. Missing NX, PIE, "
+                    "stack canaries or full RELRO are factual, reportable "
+                    "posture gaps that weight memory-corruption findings."
+                ),
+                defensive="Build pipelines should enforce all mitigations; CI can fail on regression.",
+                keywords=("checksec", "nx", "pie", "canary", "relro", "hardening"),
+            ),
+            Topic(
+                key="string_ioc_hunting",
+                title="String & Artifact Extraction for IOCs",
+                capability_class="binary_analysis",
+                summary=(
+                    "Printable strings often carry URLs, IPs, domains, file "
+                    "paths, mutexes and crypto-constant hints. Pattern-"
+                    "classified extraction turns a byte blob into IOC "
+                    "candidates with provenance — candidates, not verdicts."
+                ),
+                defensive="Feed extracted IOCs into monitoring and threat-intel correlation; track IOC lifecycle state.",
+                keywords=("strings", "ioc", "indicators", "c2", "artifacts"),
+            ),
+            Topic(
+                key="symbol_import_analysis",
+                title="Symbol & Import Analysis",
+                capability_class="binary_analysis",
+                summary=(
+                    "nm/readelf symbol tables reveal exports and undefined "
+                    "imports. socket/connect/execve/dlopen-class imports are "
+                    "behavioral hints that focus the disassembly effort — "
+                    "hints, never proof of malicious behavior."
+                ),
+                defensive="Application allow-lists and import review catch unexpected capabilities in shipped code.",
+                keywords=("nm", "symbols", "imports", "dynamic linking"),
+            ),
+            Topic(
+                key="disassembly_reading",
+                title="Controlled Disassembly & Call Reading",
+                capability_class="binary_analysis",
+                summary=(
+                    "objdump decodes instruction bytes as data: which "
+                    "functions a suspicious path calls and in what order. "
+                    "Reading is not running — the disassembler never executes "
+                    "the sample, so the analysis stays offline and safe."
+                ),
+                defensive="Understanding called APIs guides both the incident response and the detection logic.",
+                keywords=("objdump", "disassembly", "calls", "control flow"),
+            ),
+            Topic(
+                key="malware_analysis_boundary",
+                title="Analysis-Only Boundary & Detonation Policy",
+                capability_class="info",
+                summary=(
+                    "This framework analyzes; it never weaponizes. No unpacked "
+                    "payload is reconstructed into a working artifact, no "
+                    "exploit is built from a discovered flaw, and detonation "
+                    "belongs to isolated external sandboxes — never the "
+                    "analyst's workstation or any production system."
+                ),
+                defensive="Blue teams use the identical static findings to write detections — analysis and defense share one artifact set.",
+                keywords=("malware analysis", "detonation", "sandbox", "ethics", "boundary"),
+            ),
+        ),
+    ),
 )
 
 

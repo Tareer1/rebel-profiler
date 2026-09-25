@@ -174,6 +174,28 @@ RP_SUDO_ASKPASS=/path/to/askpass.sh rebel-profiler --privileged run \
 Or run the whole command under `sudo -i` yourself — then no flag is needed.
 A sudo password failure returns the exact sudoers/askpass hint in stderr.
 
+## 0f. Reverse engineering & binary analysis (offline, analysis-only)
+
+```bash
+# Static triage of a possessed sample — the whole chain in one run:
+rebel-profiler intel playbook run binary-triage <case-id> /srv/samples/app.bin
+
+# Or step by step (the sample is DATA — nothing ever executes it):
+rebel-profiler intel collect <case-id> binary-info  /srv/samples/app.bin  # ELF header, arch, libs
+rebel-profiler intel collect <case-id> checksec     /srv/samples/app.bin  # NX/PIE/canary/RELRO posture
+rebel-profiler intel collect <case-id> string-dump  /srv/samples/app.bin  # IOC candidates (URLs, IPs, domains)
+rebel-profiler intel collect <case-id> symbol-dump  /srv/samples/app.bin  # imports/exports (socket, execve…)
+rebel-profiler intel collect <case-id> disasm       /srv/samples/app.bin -p section .text
+```
+
+New capability class `binary_analysis` (risk: low, offline reads) and the
+new knowledge domain **16 — Reverse Engineering & Binary Analysis** (static
+lifecycle, format ID, mitigation review, IOC hunting, import analysis,
+disassembly, the analysis-only/detonation boundary). The sample must never
+be executed by this tool: no unpacking to runnable artifacts, no exploit
+construction, detonation belongs to external sandboxes. `/proc`, `/sys` and
+`/dev` paths are refused.
+
 ## 1. Case lifecycle (every job starts here)
 
 ```bash

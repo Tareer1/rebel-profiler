@@ -404,11 +404,14 @@ audited.
 
 ## Knowledge layer
 
-15 domains (foundations → networking → security → footprinting → scanning →
+16 domains (foundations → networking → security → footprinting → scanning →
 enumeration → system → malware → sniffing → social engineering → wireless →
-attack/defense → cryptography → architecture → cloud/IoT), each with topics
-wired to capability classes, authorization gates, Kali tooling and defensive
-counterparts. This is the structured context the LLM planner consumes —
+attack/defense → cryptography → architecture → cloud/IoT → reverse
+engineering), each with topics wired to capability classes, authorization
+gates, Kali tooling and defensive counterparts. Domain 16 powers the static
+RE plane: `binary-info`, `checksec`, `string-dump`, `symbol-dump` and
+`disasm` dissect a POSSESSED sample offline — bytes as data, the file is
+never executed. This is the structured context the LLM planner consumes —
 `rebel-profiler knowledge planner-context -o json` emits it machine-readably.
 Content is original to this project; it mirrors standard curriculum coverage
 without reproducing any external text.
@@ -614,7 +617,7 @@ machine-specific install commands.
 
 ## Status
 
-Current release: **v1.5.0** — the suite stands at 1050+ tests passing, CI
+Current release: **v1.5.0** — the suite stands at 1080+ tests passing, CI
 green. Phases 1–6 complete: core foundation, OSINT/recon intelligence,
 surface & fusion, case workflows/RBAC, platform integrations (worker plane,
 browser bridge, Feature Forge, complaint packages) and QA acceptance. The
@@ -627,12 +630,14 @@ device inventory and the **wireless plane** (`wlan-survey`, `wlan-monitor`,
 `wlan-ap-audit`: authorized-site 802.11 posture audits — listen-only,
 approval-gated monitor mode, client-probe SSIDs never recorded;
 `--privileged` wraps only airmon-ng/airodump-ng via whitelisted sudo for
-non-root operators). The **Kali tool surface** now spans 40 gated actions:
+non-root operators). The **Kali tool surface** now spans 45 gated actions:
 nikto, wpscan (no brute force), offline searchsploit correlation, own-
-interface tcpdump aggregates and the lynis blue-team baseline all sit
-behind the same six gates, with coverage-driven planning
-(`intel vuln-coverage --plan`, `agent run --coverage`) turning coverage
-blind spots into the default next action. See
+interface tcpdump aggregates, the lynis blue-team baseline and the
+**static RE plane** (`binary-info`, `checksec`, `string-dump`,
+`symbol-dump`, `disasm` — offline analysis of possessed samples, bytes as
+data, never executed) all sit behind the same six gates, with coverage-
+driven planning (`intel vuln-coverage --plan`, `agent run --coverage`)
+turning coverage blind spots into the default next action. See
 [ROADMAP.md](ROADMAP.md) for the shipped checklist and
 [ARCHITECTURE.md](ARCHITECTURE.md) for the plane model and data flow.
 
