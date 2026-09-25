@@ -37,17 +37,63 @@ REPLY_SNIPPET_MAX = 240
 _JSON_FENCE = re.compile(r"```(?:json)?\s*(\[.*?\]|\{.*?\})\s*```", re.DOTALL)
 
 
-def build_plan_prompt(view) -> str:
+def repair_json_array(reply: str) -> str:
+    """One deterministic repair pass over a near-miss JSON array.
+
+    Small models (0.5B–1.5B) miss on the same edges every time: trailing
+    commas, single quotes, smart quotes, stray prose around the array,
+    unescaped trailing backslash. One bounded pass, no guessing about
+    *content* — anything still unparseable is refused honestly.
+    """
+    text = _extract_json_array(reply)
+    # strip prose before/after the outermost brackets
+    start, end = text.find("["), text.rfind("]")
+    if start == -1 or end == -1 or end <= start:
+        return text
+    candidate = text[start: end + 1]
+    # normalize quotes models like to emit
+    candidate = candidate.replace("\u201c", '"').replace("\u201d", '"')
+    candidate = candidate.replace("\u2018", "'").replace("\u2019", "'")
+    # single-quoted strings → double-quoted (values keep inner apostrophes)
+    if "'" in candidate and '"' not in candidate:
+        candidate = candidate.replace("'", '"')
+    # trailing commas before ] or }
+    candidate = re.sub(r",\s*([\]}])", r"\1", candidate)
+    return candidate
+
+
+def build_plan_prompt(view, *, compact: bool = False) -> str:
     """Render a PlannerView into the planner prompt.
 
     The goal is redacted before it can reach any model (secrets never leak),
     and the available-action contract is emitted verbatim from the live
     adapter registry — the model cannot propose what is not printed.
+
+    ``compact=True`` renders a *small-model* variant (tiny/low tiers,
+    0.5B-class): no indentation, no per-action guides, the domain keyword
+    line only, and a single filled example. Fast to answer, tiny to read.
     """
     goal = redact(str(view.goal))[:PROMPT_GOAL_MAX_CHARS]
     actions = view.available_actions()
+    compact = bool(getattr(view, "compact", False))
     from ..knowledge.action_guides import find_action_guide
 
+    if compact:
+        lines = []
+        for entry in actions:
+            line = (f"- {entry['action']}"
+                    f" [{entry['capability_class']}]"
+                    f" params: {','.join(entry.get('allowed_params', [])) or '-'}")
+            lines.append(line)
+        contract = "\n".join(lines)
+        return (
+            "Plan authorized security actions. Rules: use ONLY listed "
+            "actions+params; passive first; reply = one JSON array only.\n"
+            f"GOAL: {goal}\n"
+            f"ACTIONS:\n{contract}\n"
+            'EXAMPLE: [{"action": "passive-dns", "target": "example.com", '
+            '"params": {}}]\n'
+        )
     enriched = []
     for entry in actions:
         guide = find_action_guide(str(entry.get("action", "")))
@@ -120,13 +166,18 @@ def parse_proposals(reply: str, registry=None) -> list[Proposal]:
     raw = _extract_json_array(reply)
     try:
         data = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise UsageError(
-            "LLM planner reply is not parsable as proposals",
-            reason=f"JSON decode failed ({exc}); reply snippet: {snippet!r}",
-            action="Re-run with a stronger model, or pass an explicit "
-                   "--plan 'action:target[:k=v,k=v];...'.",
-        ) from exc
+    except json.JSONDecodeError:
+        # Small-model repair pass: one deterministic pass over the usual
+        # near-misses (trailing commas, smart quotes, single quotes).
+        try:
+            data = json.loads(repair_json_array(reply))
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise UsageError(
+                "LLM planner reply is not parsable as proposals",
+                reason=f"JSON decode failed ({exc}); reply snippet: {snippet!r}",
+                action="Re-run with a stronger model, or pass an explicit "
+                       "--plan 'action:target[:k=v,k=v];...'.",
+            ) from exc
     if isinstance(data, dict):
         data = [data]
     if not isinstance(data, list) or not data:
@@ -201,6 +252,14 @@ class LlmPlanner:
     def __call__(self, view):
         prompt = build_plan_prompt(view)
         self.last_prompt = prompt
+        # Estimate the prompt size and switch to the small-model variant
+        # when the resolved tier's context cannot hold the full contract —
+        # tiny/low tiers (0.5B-class planning) get the compact render.
+        tier_limits = getattr(self.plane, "limits", None)
+        max_ctx = getattr(tier_limits, "max_context_tokens", 0) or 0
+        if max_ctx and len(prompt) // 4 > max_ctx * 0.75:
+            prompt = build_plan_prompt(view, compact=True)
+            self.last_prompt = prompt
         # Always ensure an engine exists: with no model pinned (e.g. the model
         # came from a config profile, not the CLI) select_engine falls back to
         # the tier default — never generate with no engine loaded.

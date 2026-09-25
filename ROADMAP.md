@@ -301,6 +301,14 @@ weakening a single gate. Every item keeps the Phase 1 invariants.
   deliberately absent: detection, not disruption. The `wifi-posture`
   playbook chains monitor → survey → restore → audit; three
   `wifi_*` vulnerability-coverage rows and action guides ship with it
+- [x] **CWE knowledge plane**: the official MITRE `cwec_latest` catalog
+  (weaknesses + categories, v4.20, ~1391 entries) is fetched once on
+  demand with a distinct User-Agent, parsed to a compact cache under the
+  data dir, and merged over a built-in seed covering every CWE the tool's
+  own planes reference — so lookup, search and blind-spot ranking work
+  offline-first; `intel cwe blind-spots <case>` ranks un-probed weakness
+  classes by MITRE exploit likelihood then by what the tool can still
+  run, and every entry still passes the six gates
 - [x] **Crawler scope discipline**: the web auditor's fetcher never follows
   redirects automatically (urllib's default follow would silently fetch
   out-of-scope hosts); a Location header pointing outside the case scope

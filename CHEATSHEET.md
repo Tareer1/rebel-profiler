@@ -592,6 +592,23 @@ run/work/auto` and the daemon.
 `0` ok · `2` usage · `3` config · `4` permission/policy · `5` scope ·
 `7` dependency · `11` evidence tamper · `12` state · `15` model budget
 
+## 12. CWE knowledge (offline seed + official MITRE catalog, live-fetched once)
+
+```bash
+rebel-profiler intel cwe lookup 79              # one weakness: description, likelihood, mitigations
+rebel-profiler intel cwe lookup --refresh 639   # force-fetch the latest MITRE catalog first
+rebel-profiler intel cwe search "open redirect" # keyword search across the catalog
+rebel-profiler intel cwe blind-spots <case-id>  # likelihood-ranked weaknesses this case has NOT probed
+rebel-profiler intel cwe status                 # cache status (builtin seed vs MITRE v4.x cache)
+rebel-profiler intel cwe refresh                # fetch the official MITRE CWE catalog once
+```
+
+The catalog is external content handled like every other input: fetched
+once with a distinct User-Agent, wrapped as DATA, cached under the data
+dir with its published version, and the blind-spot report ranks by MITRE
+exploit likelihood then by what this tool can still run — every entry
+still passes the six gates before anything executes.
+
 ## The one rule
 
 > The LLM proposes; the system decides. Scope fails closed; nothing runs

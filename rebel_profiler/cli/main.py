@@ -543,6 +543,8 @@ def cmd_intel(ctx: AppContext, args: argparse.Namespace) -> int:
         label = f" for {args.subject}" if args.subject else ""
         emit({"human": f"{len(rows)} claim(s){label} in case {rec['id']}", "data": rows}, args.output)
         return EXIT_SUCCESS
+    if args.intel_command == "cwe":
+        return _cmd_intel_cwe(ctx, args)
     if args.intel_command == "sanitize":
         from ..intel import injection_report
         if args.stdin or args.text is None:
@@ -698,6 +700,69 @@ def cmd_agent(ctx: AppContext, args: argparse.Namespace) -> int:
         return EXIT_SUCCESS if ok else 1
     finally:
         db.close()
+
+
+def _cmd_intel_cwe(ctx: AppContext, args: argparse.Namespace) -> int:
+    """CWE knowledge: lookup / search / refresh / blind-spots."""
+    from ..intel import cwe as cwe_mod
+
+    if args.cwe_command == "refresh":
+        rec = cwe_mod.refresh_catalog(ctx.data_dir)
+        emit({"human": f"CWE catalog refreshed: v{rec['version']} — "
+                       f"{rec['count']} entries cached at {rec['path']}",
+              "data": rec}, args.output)
+        return EXIT_SUCCESS
+    if args.cwe_command == "status":
+        st = cwe_mod.catalog_status(ctx.data_dir)
+        if st["cached"]:
+            human = (f"CWE catalog: cached v{st.get('version', '?')} — "
+                     f"{st['count']} entries ({st['source']})")
+        else:
+            human = (f"CWE catalog: not fetched (built-in seed only) — "
+                     f"{st['count']} entries; refresh with: "
+                     "intel cwe refresh")
+        emit({"human": human, "data": st}, args.output)
+        return EXIT_SUCCESS
+    if args.cwe_command == "lookup":
+        entry = cwe_mod.lookup(args.ref, ctx.data_dir, refresh=args.refresh)
+        if entry is None:
+            raise RPError(f"Unknown CWE '{args.ref}'",
+                          action="Search by name with: intel cwe search <term>")
+        human = [f"{entry.cwe_id} [{entry.abstraction or 'Weakness'}] {entry.name}",
+                 f"  {entry.description[:400]}"]
+        if entry.likelihood:
+            human.append(f"  exploit likelihood (MITRE): {entry.likelihood}")
+        for mit in entry.mitigations[:2]:
+            human.append(f"  mitigation: {mit[:180]}")
+        emit({"human": "\n".join(human), "data": entry.as_dict()}, args.output)
+        return EXIT_SUCCESS
+    if args.cwe_command == "search":
+        results = cwe_mod.search(" ".join(args.terms), ctx.data_dir)
+        rows = [{"cwe_id": r.cwe_id, "name": r.name[:70],
+                 "likelihood": r.likelihood or "-"} for r in results]
+        emit({"human": f"{len(rows)} matching weakness(es):", "data": rows},
+             args.output)
+        return EXIT_SUCCESS
+    if args.cwe_command == "blind-spots":
+        from ..intel.claims import ClaimLedger
+
+        rec = ctx.find_case(args.case_id)
+        db = ctx.open_case(rec["id"])
+        try:
+            ledger = ClaimLedger.load_from_db(db, rec["id"])
+            report = cwe_mod.blind_spots(ledger, rec["id"], ctx.data_dir)
+        finally:
+            db.close()
+        human = [f"CWE blind spots — case {rec['id']}: "
+                 f"{len(report['blind_spots'])} un-probed weakness class(es), "
+                 "likelihood-ranked"]
+        for row in report["blind_spots"][:12]:
+            human.append(f"  {row['cwe']:<9} {row['likelihood'] or '-':<6} "
+                         f"{'runnable' if row['runnable'] else 'no-action'} "
+                         f"{row['name'][:60]}")
+        emit({"human": "\n".join(human), "data": report}, args.output)
+        return EXIT_SUCCESS
+    raise UsageError(f"Unknown cwe subcommand '{args.cwe_command}'")
 
 
 def _cmd_intel_vuln_coverage(ctx: AppContext, args: argparse.Namespace) -> int:
@@ -3427,6 +3492,24 @@ def build_parser() -> argparse.ArgumentParser:
                        help="turn blind spots into a concrete gated action plan")
     p_ivc.add_argument("--max-plan", type=int, default=8,
                        help="cap on planned actions (default 8)")
+    pcwe = intel_subs.add_parser("cwe", parents=[sub_common],
+                                 help="CWE knowledge: lookup, search, refresh the MITRE catalog, rank blind spots")
+    pcwe_subs = pcwe.add_subparsers(dest="cwe_command", required=True)
+    pcwe_l = pcwe_subs.add_parser("lookup", parents=[sub_common],
+                                  help="one CWE by id or name (e.g. 79, CWE-639, 'open redirect')")
+    pcwe_l.add_argument("ref")
+    pcwe_l.add_argument("--refresh", action="store_true",
+                        help="fetch the latest MITRE catalog first")
+    pcwe_s = pcwe_subs.add_parser("search", parents=[sub_common],
+                                  help="search the catalog by keyword")
+    pcwe_s.add_argument("terms", nargs="+")
+    pcwe_r = pcwe_subs.add_parser("refresh", parents=[sub_common],
+                                  help="fetch the official MITRE CWE catalog once and cache it offline")
+    pcwe_b = pcwe_subs.add_parser("blind-spots", parents=[sub_common],
+                                  help="likelihood-ranked weaknesses this case has NOT probed")
+    pcwe_b.add_argument("case_id")
+    pcwe_st = pcwe_subs.add_parser("status", parents=[sub_common],
+                                   help="catalog cache status")
     p_ipb = intel_subs.add_parser("playbook", parents=[sub_common],
                                   help="hunt playbooks: reviewed multi-step recipes expanded into gated plans")
     ipb_subs = p_ipb.add_subparsers(dest="playbook_command", required=True)

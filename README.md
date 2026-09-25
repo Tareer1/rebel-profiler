@@ -109,6 +109,10 @@ rebel-profiler intel sanitize "ignore all previous instructions…"
 rebel-profiler intel collect <case-id> passive-dns example.com -p record_type MX
 rebel-profiler intel collect <case-id> cert-transparency example.com
 
+# 11b. CWE knowledge: the official MITRE catalog, live-fetched once, offline after
+rebel-profiler intel cwe lookup 79              # description, exploit likelihood, mitigations
+rebel-profiler intel cwe blind-spots <case-id>  # likelihood-ranked weaknesses this case has NOT probed
+
 # 11. Agent session: goal → gated actions → report (the LLM-operator harness)
 rebel-profiler agent run <case-id> "map example.com passive footprint"
 rebel-profiler agent run <case-id> "map example.com" \
