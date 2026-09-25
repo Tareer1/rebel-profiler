@@ -212,6 +212,77 @@ RULES: tuple[Rule, ...] = (
         reproduce="curl -sSI {url} | grep -i set-cookie",
         impact="Session material may leak to scripts or cleartext transport.",
     ),
+    # ---- nikto / wpscan / exploit-lookup / capture (Kali expansion) ----
+    Rule(
+        prefix="nikto_finding",
+        title="Web-server misconfiguration (nikto)",
+        severity="low",
+        cwe="CWE-16",
+        remediation="Review the flagged file/behaviour: remove default and "
+                    "sample content, patch outdated software, restrict "
+                    "dangerous methods.",
+        reproduce="nikto -h {host} -Format csv -o -",
+        impact="A known dangerous file or server misconfiguration is reachable.",
+    ),
+    Rule(
+        prefix="nikto_reference",
+        title="nikto reference detail",
+        severity="informational",
+        cwe="CWE-200",
+        remediation="Follow the reference (OSVDB/CVE) to confirm whether the "
+                    "flagged item applies to this deployment.",
+        reproduce="nikto -h {host} -Format csv -o -",
+        impact="Supporting reference for a nikto finding.",
+    ),
+    Rule(
+        prefix="wp_finding",
+        title="WordPress exposure (wpscan)",
+        severity="medium",
+        cwe="CWE-1104",
+        remediation="Update the flagged core/plugin/theme; remove exposed "
+                    "backup and debug files; disable XML-RPC if unused.",
+        reproduce="wpscan --url {url} --enumerate vp,vt",
+        impact="A vulnerable CMS component version is publicly identifiable.",
+    ),
+    Rule(
+        prefix="wp_info",
+        title="WordPress surface detail (wpscan)",
+        severity="informational",
+        cwe="CWE-200",
+        remediation="Keep core/plugins/themes current; version disclosure "
+                    "alone is context for the findings above.",
+        reproduce="wpscan --url {url}",
+        impact="CMS version/component details aid targeted attacks.",
+    ),
+    Rule(
+        prefix="exploit_candidate",
+        title="Published exploit exists (offline EDB lookup)",
+        severity="informational",
+        cwe="CWE-1395",
+        remediation="Correlate the EDB entry with the deployed version and "
+                    "patch; publication does not prove exploitability here.",
+        reproduce="searchsploit -t '<product> <version>' --json",
+        impact="A public exploit targets software resembling this surface.",
+    ),
+    Rule(
+        prefix="capture_summary",
+        title="Cleartext protocol observed on the local segment",
+        severity="low",
+        cwe="CWE-319",
+        remediation="Encrypt the flagged protocol (TLS everywhere) or move it "
+                    "to a trusted management segment.",
+        reproduce="tcpdump -i <iface> -c 200 -nn -q <filter>",
+        impact="Traffic aggregates show a protocol worth encrypting.",
+    ),
+    Rule(
+        prefix="hardening_suggestion",
+        title="Local hardening gap (lynis, own machine)",
+        severity="informational",
+        cwe="CWE-16",
+        remediation="Apply the lynis suggestion; re-run 'host-audit' to verify.",
+        reproduce="lynis audit system --quick",
+        impact="The operator's own baseline has a hardening gap.",
+    ),
 )
 
 # Cleartext / over-exposed services seen in discovery output.

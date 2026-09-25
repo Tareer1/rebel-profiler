@@ -87,11 +87,15 @@ class TestFlagValidation:
                          args=["+short", "-t", "MX"]))
         assert argv == ["dig", "+short", "-t", "MX", "lab.example.test"]
 
-    def test_url_tool_requires_url_target(self):
+    def test_url_tool_accepts_host_or_url(self):
+        """url-kind tools upgraded: bare hosts pass, garbage still refuses."""
+        argv = ToolExecAdapter().build_argv(
+            make_request(target="h1.lab.example.test", tool="nikto",
+                         args=["-port", "80"]))
+        assert argv[-1] == "h1.lab.example.test"
         with pytest.raises(UsageError):
             ToolExecAdapter().build_argv(
-                make_request(target="h1.lab.example.test", tool="nikto",
-                             args=["-port", "80"]))
+                make_request(target="not a target!", tool="nikto"))
 
     def test_url_tool_accepts_url(self):
         argv = ToolExecAdapter().build_argv(

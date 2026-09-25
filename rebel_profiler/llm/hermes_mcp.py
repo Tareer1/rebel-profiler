@@ -39,6 +39,7 @@ _MCP_TOOLS = (
     "evidence_verify", "audit_verify", "knowledge_search", "glossary",
     "hunt_run", "hunt_triage", "probe_suggest", "approval_list",
     "approval_decide", "browser_grab", "scope_show", "scope_add",
+    "collect",
 )
 
 

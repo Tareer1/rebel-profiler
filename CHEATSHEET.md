@@ -114,6 +114,40 @@ rebel-profiler run <case-id> wlan-monitor operator-laptop \
 rebel-profiler run <case-id> wlan-ap-audit office-floor-2  # offline summary
 ```
 
+## 0e. Kali tool surface (40 gated actions)
+
+```bash
+# Web misconfiguration sweep (polite tuning, CSV to stdout):
+rebel-profiler intel collect <case-id> nikto-scan h1.lab.example.test -p port 443 -p ssl 1
+
+# WordPress exposure audit — NO brute force, NO aggressive enumeration:
+rebel-profiler intel collect <case-id> wpscan-audit https://wp.lab.example.test
+
+# Offline exploit-db correlation — ZERO target traffic:
+rebel-profiler intel collect <case-id> exploit-lookup "nginx 1.18"
+
+# Listen-only packet capture on the OWN interface (protocol aggregates only):
+rebel-profiler intel collect <case-id> packet-capture office-floor-2 -p interface eth0 -p filter tcp -p count 300
+
+# Local hardening baseline (lynis on the operator's own box — blue team):
+rebel-profiler intel collect <case-id> host-audit operator-laptop
+
+# Two more playbooks ship with these:
+rebel-profiler intel playbook run web-deep-audit <case-id> h1.lab.example.test
+rebel-profiler intel playbook run own-box-baseline <case-id> operator-laptop
+
+# Coverage-driven planning: audit what you have NOT covered yet
+rebel-profiler intel vuln-coverage <case-id> --plan        # blind spots → plan
+rebel-profiler agent run <case-id> "audit the blind spots" --coverage
+```
+
+`nikto-scan`/`wpscan-audit` feed `nikto_finding`/`wp_finding` claims;
+`exploit-lookup` produces advisory `exploit_candidate` claims (publication
+≠ exploitability); `packet-capture` records protocol AGGREGATES only — no
+addresses of bystanders, no payloads, named BPF filters only; `host-audit`
+is the lynis blue-team baseline. All of it passes the same six gates, and
+`hermes`/`rp-mcp` can drive every one through the `collect` operator tool.
+
 APs become `ap` claims (BSSID, channel, ESSID), encryption posture becomes
 `wifi_security` (WEP/TKIP/open = reportable), associated clients become
 `wireless_sta` — association-only: probe SSIDs are NEVER recorded.

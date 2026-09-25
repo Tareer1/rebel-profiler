@@ -18,6 +18,8 @@ output yields no claims, never invented ones.
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import re
 import time
@@ -631,6 +633,152 @@ def _parse_param_hunt(stdout: str, subject: str) -> list[tuple[str, str]]:
     return pairs[:100]
 
 
+def _parse_nikto_csv(stdout: str) -> list[tuple[str, str]]:
+    """nikto -Format csv -o -: header line + one finding per row.
+
+    nikto CSV columns: Item,Name,References,Method,URI,IP,Hostname,Timestamp.
+    The Name column carries the finding text; the URI, when present, names
+    where it lives. Rows without a name are the run summary — skipped.
+    """
+    pairs: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for row in csv.reader(io.StringIO(stdout)):
+        if not row or not row[0].strip().isdigit():
+            continue   # header line, blank lines, footer
+        if len(row) < 3:
+            continue
+        name = row[1].strip()
+        if not name or name.lower().startswith(("+", "items tested")):
+            continue
+        uri = row[4].strip() if len(row) > 4 else ""
+        value = f"{name[:160]}" + (f" @ {uri[:120]}" if uri else "")
+        refs = row[2].strip() if len(row) > 2 else ""
+        key = ("nikto_finding", value.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        pairs.append(("nikto_finding", value))
+        if refs:
+            pairs.append(("nikto_reference", refs[:160]))
+    return pairs[:80]
+
+
+def _parse_wpscan_text(stdout: str) -> list[tuple[str, str]]:
+    """wpscan text output: '[i]|(!)|[!] Section: detail' lines.
+
+    The alert lines (!) are the findings; info lines (i) carry the
+    version/tech context. Brute-force / config-backup sections never
+    appear because the adapter cannot run them (no wordlist params).
+    """
+    pairs: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line or len(line) < 8:
+            continue
+        m = re.match(r"^\[([!i])\]\s+([^\n]{4,180})", line)
+        if not m:
+            continue
+        level, text = m.group(1), m.group(2).strip()
+        kind = "wp_finding" if level == "!" else "wp_info"
+        # wpscan flags interesting files as 'The URL is...' findings too;
+        # both shapes carry a URL or a version — keep those readable
+        key = (kind, text.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        pairs.append((kind, text[:200]))
+    return pairs[:60]
+
+
+def _parse_searchsploit_json(stdout: str) -> list[tuple[str, str]]:
+    """searchsploit --json: {"RESULTS_EXPLOIT":[{Title,ID,...}]}.
+
+    Advisory-only: each result becomes one exploit_candidate claim with
+    its EDB id — the operator reads them; nothing is ever executed.
+    """
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError:
+        return []
+    results = payload.get("RESULTS_EXPLOIT") or []
+    if not isinstance(results, list):
+        return []
+    pairs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for row in results[:40]:
+        if not isinstance(row, dict):
+            continue
+        title = str(row.get("Title", "")).strip()[:160]
+        edb = str(row.get("EDB-ID", row.get("Code", ""))).strip()[:20]
+        if not title:
+            continue
+        key = title.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        pairs.append(("exploit_candidate", f"{title} (EDB-{edb})" if edb else title))
+    return pairs
+
+
+def _parse_tcpdump_summary(stdout: str) -> list[tuple[str, str]]:
+    """tcpdump -nn -q: one summary line per captured packet.
+
+    Claims are PROTOCOL AGGREGATES (packet counts per proto/port pair),
+    never per-packet dumps — no addresses of bystanders, no payloads.
+    """
+    counts: dict[str, int] = {}
+    for line in stdout.splitlines():
+        if ">" not in line:
+            continue
+        # 'IP 10.0.0.1.53022 > 10.0.0.2.443: tcp 0' → proto 'tcp:443'
+        # (the DESTINATION port names the service; match caselessly —
+        # tcpdump -q prints the proto in lowercase)
+        dst = line.split(">", 1)[-1]
+        m = re.search(r"\.([0-9]{1,5}):\s*(tcp|udp)\b", dst, re.IGNORECASE)
+        if m:
+            proto = m.group(2).lower()
+            key = f"{proto}:{m.group(1)}"
+        else:
+            # ICMP/ARP lines carry no port: aggregate by proto only
+            m2 = re.search(r":\s*(icmp|arp)\b", dst, re.IGNORECASE)
+            if not m2:
+                continue
+            key = m2.group(1).lower()
+        counts[key] = counts.get(key, 0) + 1
+    # aggregates only: 'packets tcp:443=137' — no addresses, no payloads
+    return [("capture_summary", f"packets {k}={v}")
+            for k, v in sorted(counts.items())][:30]
+
+
+def _parse_lynis(stdout: str) -> list[tuple[str, str]]:
+    """lynis audit system: 'suggestion[]' lines are the hardening gaps.
+
+    Lynis prints 'suggestion[]LYN-TSTN-XXX|Category|Detail' rows in the
+    results block. Each becomes one hardening_suggestion claim — defensive
+    guidance for the operator's own machine, never offensive data.
+    """
+    pairs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("suggestion["):
+            continue
+        payload = line[len("suggestion["):].split("]", 1)[-1]
+        parts = payload.split("|")
+        if not parts:
+            continue
+        detail = (parts[-1] if len(parts) > 2 else parts[0]).strip()[:180]
+        test_id = parts[0].strip() if parts else ""
+        value = f"{test_id}: {detail}" if test_id else detail
+        key = value.lower()
+        if not detail or key in seen:
+            continue
+        seen.add(key)
+        pairs.append(("hardening_suggestion", value))
+    return pairs[:100]
+
+
 def _parse_nuclei_jsonl(stdout: str) -> list[tuple[str, str]]:
     """nuclei -jsonl: one JSON object per finding on stdout.
 
@@ -953,6 +1101,16 @@ class CollectionPipeline:
             pairs = _parse_param_hunt(stdout, subject)
         elif effective_action == "nuclei-scan":
             pairs = _parse_nuclei_jsonl(stdout)
+        elif effective_action == "nikto-scan":
+            pairs = _parse_nikto_csv(stdout)
+        elif effective_action == "wpscan-audit":
+            pairs = _parse_wpscan_text(stdout + "\n" + stderr)
+        elif effective_action == "exploit-lookup":
+            pairs = _parse_searchsploit_json(stdout)
+        elif effective_action == "packet-capture":
+            pairs = _parse_tcpdump_summary(stdout)
+        elif effective_action == "host-audit":
+            pairs = _parse_lynis(stdout)
         elif effective_action == "header-audit":
             pairs = _parse_header_head(stdout)
         elif effective_action == "tls-posture":
@@ -1033,6 +1191,11 @@ class CollectionPipeline:
             "httpx-probe": "scan.web",
             "param-hunt": "scan.web",
             "nuclei-scan": "scan.nuclei",
+            "nikto-scan": "scan.web",
+            "wpscan-audit": "scan.web",
+            "exploit-lookup": "db.exploit",
+            "packet-capture": "sniff.local",
+            "host-audit": "audit.lynis",
             "header-audit": "scan.web",
             "tls-posture": "scan.tls",
             "wlan-survey": "scan.wireless",

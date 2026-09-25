@@ -59,6 +59,10 @@ _GROUPS: tuple[ToolGroup, ...] = (
             Tool("dns-lookup", "dig", "passive_recon", (),
                  "Authoritative DNS record collection via resolver queries.",
                  ("networking", "footprinting")),
+            Tool("exploit-lookup", "searchsploit", "passive_recon", (),
+                 "Offline exploit-db correlation for fingerprinted software — "
+                 "zero target traffic, advisory output only.",
+                 ("footprinting", "scanning")),
             Tool("whois-lookup", "whois", "passive_recon", (),
                  "Domain registration intelligence from public registries.",
                  ("footprinting",)),
@@ -128,6 +132,10 @@ _GROUPS: tuple[ToolGroup, ...] = (
             Tool("dns-enum", "dnsenum", "network_mapping", ("confirmation",),
                  "DNS enumeration including AXFR misconfiguration checks.",
                  ("enumeration",)),
+            Tool("packet-capture", "tcpdump", "network_mapping", ("confirmation",),
+                 "Bounded, listen-only packet capture on the operator's own "
+                 "interface; protocol aggregates only, named BPF filters.",
+                 ("sniffing", "networking")),
         ),
     ),
     ToolGroup(
@@ -158,6 +166,14 @@ _GROUPS: tuple[ToolGroup, ...] = (
             Tool("header-audit", "curl", "web_assessment", ("confirmation",),
                  "Security-header and cookie-flag review.",
                  ("attack_defense",)),
+            Tool("nikto-scan", "nikto", "web_assessment", ("confirmation",),
+                 "Web-server misconfiguration sweep: dangerous defaults, "
+                 "outdated software, risky methods (polite tuning).",
+                 ("scanning", "attack_defense")),
+            Tool("wpscan-audit", "wpscan", "web_assessment", ("confirmation",),
+                 "WordPress version/plugin/theme exposure audit — no brute "
+                 "force, no aggressive enumeration.",
+                 ("scanning", "enumeration")),
         ),
     ),
     ToolGroup(
@@ -203,6 +219,16 @@ _GROUPS: tuple[ToolGroup, ...] = (
                  ("confirmation", "approval"),
                  "Consented phishing simulation with synthetic payloads.",
                  ("social_engineering",)),
+        ),
+    ),
+    ToolGroup(
+        capability_class="config_assessment",
+        risk="moderate",
+        tools=(
+            Tool("host-audit", "lynis", "config_assessment", (),
+                 "Local hardening audit of the operator's OWN machine — "
+                 "the blue-team baseline (targetless, defensive only).",
+                 ("attack_defense", "system")),
         ),
     ),
     ToolGroup(

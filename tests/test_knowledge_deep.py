@@ -165,7 +165,7 @@ class TestDeepPlannerContext:
         ctx = deep_planner_context()
         assert ctx["schema_version"] == 3
         assert len(ctx["domains"]) == 15
-        assert len(ctx["tool_matrix"]) == 8
+        assert len(ctx["tool_matrix"]) == 9
         assert len(ctx["techniques"]) == 15
         assert ctx["playbooks"]
         assert len(ctx["glossary"]) >= 45

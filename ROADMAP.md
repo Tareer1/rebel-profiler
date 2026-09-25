@@ -306,15 +306,36 @@ weakening a single gate. Every item keeps the Phase 1 invariants.
   out-of-scope hosts); a Location header pointing outside the case scope
   is recorded as a `redirect_off_scope` finding instead, and a per-host
   politeness floor keeps the crawl a polite citizen on the target
-- [ ] **Coverage-driven planning**: feed `intel vuln-coverage` blind spots
+- [x] **Coverage-driven planning**: feed `intel vuln-coverage` blind spots
   straight into the planner so "audit what you have not covered yet"
   becomes the default next action, not a manual choice
+  (`intel vuln-coverage --plan` emits a gated proposal list + a ready
+  `agent run --plan` payload; `agent run <case> "…" --coverage` runs it
+  through the same planner validation and six gates; covered classes are
+  never re-proposed and URL/host subject shape decides the target)
+- [x] **Kali tool expansion (40 gated actions)**: nikto (`nikto-scan`,
+  polite CSV output), wpscan (`wpscan-audit`, version/plugin exposure —
+  no brute force, no aggressive enumeration), searchsploit
+  (`exploit-lookup`, offline EDB correlation, zero target traffic),
+  tcpdump (`packet-capture`, listen-only, own interface, named BPF
+  filters, protocol aggregates only) and lynis (`host-audit`, the
+  blue-team baseline of the operator's own machine) — each with a
+  dedicated parser (unknown input yields no claims), provenance sources,
+  bounty-assess rules, action guides and a validated coverage-matrix
+  row; `web-deep-audit` and `own-box-baseline` playbooks chain them;
+  `exec-tool` gains searchsploit + host-OR-URL targets; the GUI proxy
+  whitelist and the hermes/rp-mcp `collect` operator tool expose the
+  whole surface to the chat plane
 - [x] **GUI hardening pass (part 1)**: CSP + baseline hardening headers
   (nosniff, DENY framing, no-referrer) on every proxy response, and a
   strict origin check that refuses cross-origin POSTs to the whitelisted
-  CLI surface — a malicious tab can no longer drive the whitelist. Still
-  open: a session-kill button that closes the gateway, proxy and browser
-  bridge together
+  CLI surface — a malicious tab can no longer drive the whitelist
+- [x] **GUI hardening pass (part 2) — session kill**: the Settings screen's
+  one-click kill closes the gateway, the browser bridge and the proxy
+  together (same-origin gated POST /api/session_kill; teardown SIGTERMs
+  only same-user rebel-profiler serve/bridge processes found via a pure
+  /proc scan — never arbitrary pids; evidence and audit chains stay on
+  disk, only the listeners stop)
 - [ ] **Windows/WSL support matrix**: doctor + adapters verified under WSL2
   with the same Kali toolset, gaps documented honestly (some hunter
   binaries have no Windows build)

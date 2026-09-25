@@ -574,6 +574,94 @@ _ACTION_GUIDES: tuple[ActionGuide, ...] = (
                       "reportable posture findings; nothing is transmitted."),
         next_steps=("header-audit",),
     ),
+    ActionGuide(
+        action="nikto-scan",
+        capability_class="web_assessment",
+        when=("You need a broad misconfiguration sweep of one web origin — "
+              "dangerous default files, outdated software, risky methods.",
+              "Run after tech-fingerprint confirms a classic web server; "
+              "it is an active scan, so keep it for authorized origins only."),
+        target_shape="a single hostname (no scheme, no path); port via params",
+        target_example="h1.lab.example.test",
+        params=(("port", "1-65535, default 443"),
+                ("ssl", "1 to force https; omit for http"),
+                ("timeout", "5-120 seconds per request, default 30")),
+        example={"action": "nikto-scan", "target": "h1.lab.example.test",
+                 "params": {"port": "443", "ssl": "1"}},
+        output_claims=("nikto_finding", "nikto_reference"),
+        reads_output=("Each CSV row becomes one misconfiguration finding; the "
+                      "reference column carries the OSVDB/CVE pointer. Nikto "
+                      "noise (items-tested summary) never becomes a claim."),
+        next_steps=("nuclei-scan", "exploit-lookup", "header-audit"),
+    ),
+    ActionGuide(
+        action="wpscan-audit",
+        capability_class="web_assessment",
+        when=("The target is WordPress (whatweb reported WordPress) and you "
+              "need core/plugin/theme version exposure and vulnerable "
+              "component checks — WITHOUT any brute force."),
+        target_shape="a full URL of the WordPress root (scheme included)",
+        target_example="https://wp.lab.example.test",
+        params=(("enumerate", "comma list of vp|vt|cb|dbe — vulnerable "
+                 "plugins/themes, config backups, db exports; default vp,vt"),
+                ("timeout", "10-300 seconds per request, default 60")),
+        example={"action": "wpscan-audit", "target": "https://wp.lab.example.test",
+                 "params": {"enumerate": "vp,vt"}},
+        output_claims=("wp_finding", "wp_info"),
+        reads_output=("(!) alert lines become wp_finding claims; (i) info lines "
+                      "become wp_info context. Password attacks and aggressive "
+                      "enumeration are NOT offered by this adapter."),
+        next_steps=("exploit-lookup", "nuclei-scan"),
+    ),
+    ActionGuide(
+        action="exploit-lookup",
+        capability_class="passive_recon",
+        when=("You want to know whether published exploit-db entries exist "
+              "for a product+version already fingerprinted — a pure OFFLINE "
+              "database query on this machine; the target is never contacted."),
+        target_shape="a short search query: product and version, e.g. 'nginx 1.18'",
+        target_example="nginx 1.18",
+        params=(("exclude", "comma-separated words to filter out noise"),),
+        example={"action": "exploit-lookup", "target": "nginx 1.18"},
+        output_claims=("exploit_candidate",),
+        reads_output=("Each EDB result becomes one exploit_candidate claim with "
+                      "its id. Publication is NOT exploitability — verify with "
+                      "gated actions before reporting anything."),
+        next_steps=("nuclei-scan", "probe"),
+    ),
+    ActionGuide(
+        action="packet-capture",
+        capability_class="network_mapping",
+        when=("You need to observe which cleartext protocols actually flow on "
+              "the operator's OWN segment (segmentation review, plaintext "
+              "audit). Listen-only: capture receives, it never transmits."),
+        target_shape="a site/segment label (recorded; the capture is local)",
+        target_example="office-floor-2",
+        params=(("interface", "REQUIRED: the operator's own interface, e.g. eth0"),
+                ("filter", "named BPF filter: arp|icmp|tcp|udp|port 53|port 80|port 443|port 445|broadcast"),
+                ("count", "1-5000 packets, default 200")),
+        example={"action": "packet-capture", "target": "office-floor-2",
+                 "params": {"interface": "eth0", "filter": "tcp", "count": "200"}},
+        output_claims=("capture_summary",),
+        reads_output=("Protocol AGGREGATES only (packet counts per proto:port) — "
+                      "no addresses of bystanders, no payloads. Free-form BPF "
+                      "filters are refused by the whitelist."),
+        next_steps=("service-detect", "port-scan"),
+    ),
+    ActionGuide(
+        action="host-audit",
+        capability_class="config_assessment",
+        when=("You want the hardening baseline of the OPERATOR'S OWN machine "
+              "(blue-team): lynis audit with findings as defensive guidance. "
+              "The tool audits where it runs — the target is never contacted."),
+        target_shape="a label for the machine itself (informational, not passed to the binary)",
+        target_example="operator-laptop",
+        example={"action": "host-audit", "target": "operator-laptop"},
+        output_claims=("hardening_suggestion",),
+        reads_output=("Each lynis suggestion becomes one hardening_suggestion "
+                      "claim with its test id — apply it, re-run, verify."),
+        next_steps=("exec-tool",),
+    ),
 )
 
 _GUIDES: dict[str, ActionGuide] = {g.action: g for g in _ACTION_GUIDES}

@@ -290,6 +290,13 @@ python3 frontend/proxy.py --port 8898 --api-port 8899 --api-token SECRET</pre>
           <tr><td>browser bridge</td><td id="dg-bridge">…</td></tr>
         </tbody></table>
       </div>
+      <div class="panel"><h2>Session</h2>
+        <p class="dim" style="font-size:12px">One click closes the gateway, the browser bridge,
+          this proxy and any in-flight hermes run. Evidence and audit chains stay
+          on disk — only the listeners stop.</p>
+        <button class="btn" id="session-kill" style="border-color:var(--warn,#e6b450);color:var(--warn,#e6b450)">⏻ kill session</button>
+        <span class="dim" id="kill-note" style="font-size:11px;margin-left:8px"></span>
+      </div>
     </section>
 
     <footer>the LLM proposes — the gates decide · local-only · every claim links hash-chained evidence</footer>
@@ -598,6 +605,15 @@ $("#bg-go").onclick=async()=>{
 /* ---------- boot ---------- */
 refreshState(); refreshEvents(); loadCases(); loadApprovals(); loadAuditVisual(); loadBridgeToken();
 setInterval(refreshState,5000); setInterval(refreshEvents,5000); setInterval(loadApprovals,15000);
+
+/* ---------- session kill ---------- */
+const killBtn=document.getElementById("session-kill");
+if(killBtn){killBtn.onclick=async()=>{
+  if(!confirm("Kill the session? Gateway, browser bridge and proxy all stop."))return;
+  document.getElementById("kill-note").textContent="closing…";
+  try{await api("/api/session_kill",{method:"POST"});}catch(e){/* the proxy dies mid-reply by design */}
+  document.getElementById("kill-note").textContent="session closed — restart with 'rp gui'";
+};}
 </script>
 </body>
 </html>

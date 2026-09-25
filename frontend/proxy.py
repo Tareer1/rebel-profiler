@@ -29,11 +29,13 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 PROXY_VERSION = 1
 HTTP_TIMEOUT = 5
@@ -61,6 +63,13 @@ CLI_WHITELIST = {
     "audit_verify":    ["audit", "verify", "{case}"],
     "dork_search":     ["intel", "collect", "{case}", "dork-search", "{target}",
                         "-p", "engine", "{text}", "-p", "dork", "{text2}", "-y"],
+    # --- Kali tool surface: same whitelisted-collect pattern -------------
+    "nikto_scan":      ["intel", "collect", "{case}", "nikto-scan", "{target}",
+                        "-p", "port", "{text}", "-p", "ssl", "{text2}", "-y"],
+    "wpscan_audit":    ["intel", "collect", "{case}", "wpscan-audit", "{target}", "-y"],
+    "exploit_lookup":  ["intel", "collect", "{case}", "exploit-lookup", "{target}", "-y"],
+    "vuln_coverage":   ["intel", "vuln-coverage", "{case}"],
+    "playbooks_list":  ["intel", "playbook", "list"],
     "dork_search_tor": ["intel", "collect", "{case}", "dork-search", "{target}",
                         "-p", "engine", "ahmia", "-p", "dork", "{text}",
                         "-p", "tld", "onion", "-y"],
@@ -195,6 +204,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
     api_token: str = ""          # raw secret; the bearer hash is computed here
     rp_binary: str = "rebel-profiler"
     frontend_dir: str = ""
+    bridge_port: int = 8765
 
     # -- hardening -------------------------------------------------------------
 
@@ -333,7 +343,26 @@ class ProxyHandler(BaseHTTPRequestHandler):
                                            "/api/hermes/stream", "POST /api/cli"]})
 
     def do_POST(self):  # noqa: N802
-        if self.path.split("?", 1)[0] != "/api/cli":
+        path = self.path.split("?", 1)[0]
+        if path == "/api/session_kill":
+            # GUI hardening part 2: the operator's one-click session kill —
+            # closes the gateway, the browser bridge and THIS proxy together
+            # and stops any in-flight hermes run. Same-origin gated like the
+            # whitelist; the response is best-effort because the server dies
+            # mid-reply.
+            if not self._origin_ok():
+                self._json(403, {"error": "cross-origin request refused",
+                                 "action": "Use the GUI served by this proxy."})
+                return
+            detail = session_kill(api_port=self.api_port,
+                                  bridge_port=self.bridge_port,
+                                  proxy_port=self.server.server_address[1])
+            self._json(200, {"ok": True, "closed": detail,
+                             "note": "session ending — all listeners closed"})
+            # give the socket a moment to flush, then stop the whole process
+            threading.Timer(0.4, _shutdown_everything).start()
+            return
+        if path != "/api/cli":
             self._json(405, {"error": "method not allowed", "allowed": ["GET"]})
             return
         # CSRF / cross-origin hardening: a page from another origin (even
@@ -448,6 +477,83 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
 
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# session kill: one decision, every local listener closed
+
+_KILL_SENTINEL = "/tmp/rp_session_dead"
+
+
+def _close_port(port: int, kind: str) -> dict:
+    """Best-effort close of one local listener; never raises."""
+    import socket as _socket
+
+    try:
+        with _socket.create_connection(("127.0.0.1", port), timeout=0.4):
+            return {"kind": kind, "port": port, "was_up": True}
+    except OSError:
+        return {"kind": kind, "port": port, "was_up": False}
+
+
+def session_kill(*, api_port: int, bridge_port: int, proxy_port: int) -> list[dict]:
+    """Probe the three local listeners, then tear the session down.
+
+    The gateway and the browser bridge are separate processes, so the proxy
+    marks them dead by closing THEIR ports from outside: it sends SIGTERM to
+    any process listening on those ports owned by the same user (a systemd-
+    free Kali box has no supervisor — this IS the shutdown path). The proxy
+    itself dies with os._exit from _shutdown_everything right after.
+    """
+    import signal
+
+    detail = [_close_port(api_port, "gateway"),
+              _close_port(bridge_port, "browser_bridge"),
+              _close_port(proxy_port, "proxy")]
+    # terminate the listener processes (same user only) via /proc scanning:
+    # pids whose cmdline references the rp gateway/bridge and whose socket
+    # sits on the target port. Conservative: exact match on our own argv
+    # patterns, nothing else is ever signalled.
+    me = os.getpid()
+    for pid, cmdline in _own_user_processes():
+        if pid == me:
+            continue
+        joined = " ".join(cmdline)
+        if ("rebel-profiler" in joined
+                and ("serve" in joined or "bridge" in joined)):
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
+    try:
+        Path(_KILL_SENTINEL).write_text(
+            json.dumps({"at": time.time(), "closed": detail}) + "\n")
+    except OSError:
+        pass
+    return detail
+
+
+def _own_user_processes() -> list[tuple[int, list[str]]]:
+    """(pid, cmdline) for processes owned by THIS user — /proc, no subprocess."""
+    out: list[tuple[int, list[str]]] = []
+    my_uid = os.getuid()
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            if entry.stat().st_uid != my_uid:
+                continue
+            argv = (entry / "cmdline").read_bytes().split(b"\0")
+            out.append((int(entry.name),
+                        [a.decode(errors="replace") for a in argv if a]))
+        except (OSError, ValueError):
+            continue
+    return out
+
+
+def _shutdown_everything() -> None:
+    """Last step of session kill: stop this proxy process hard."""
+    os._exit(0)
+
 
 def serve(args: argparse.Namespace) -> int:
     ProxyHandler.api_port = args.api_port

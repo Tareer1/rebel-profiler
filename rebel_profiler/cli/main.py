@@ -674,6 +674,8 @@ def cmd_agent(ctx: AppContext, args: argparse.Namespace) -> int:
     try:
         if getattr(args, "llm", ""):
             planner = _make_llm_planner(args.llm, ctx.broker(db).adapters)
+        elif getattr(args, "coverage", False):
+            planner = _make_coverage_planner(rec["id"], db)
         else:
             planner = _make_planner(args.plan)
         session = run_session(
@@ -701,15 +703,29 @@ def cmd_agent(ctx: AppContext, args: argparse.Namespace) -> int:
 def _cmd_intel_vuln_coverage(ctx: AppContext, args: argparse.Namespace) -> int:
     """Vulnerability-class coverage matrix for this case's evidence."""
     from ..intel.claims import ClaimLedger
-    from ..intel.vulncov import coverage_for_case
+    from ..intel.vulncov import coverage_for_case, coverage_plan
 
     rec = ctx.find_case(args.case_id)
     db = ctx.open_case(rec["id"])
     try:
         ledger = ClaimLedger.load_from_db(db, rec["id"])
         report = coverage_for_case(ledger, rec["id"])
+        plan = (coverage_plan(ledger, rec["id"], max_actions=args.max_plan)
+                if args.plan else None)
     finally:
         db.close()
+    if plan is not None:
+        human = [f"Coverage plan — case {rec['id']}: "
+                 f"{len(plan['proposals'])} proposal(s) from blind spots",
+                 f"  plan     : {plan['plan_text'] or '(nothing to propose)'}"]
+        for p in plan["proposals"]:
+            human.append(f"  → {p['action']} {p['target']}  ({p['reason']})")
+        for s in plan["skipped"][:6]:
+            human.append(f"  skip {s['class']}/{s['action']}: {s['why']}")
+        human.append("  execution still passes the six gates — use "
+                     "agent run <case> --coverage to dispatch")
+        emit({"human": "\n".join(human), "data": plan}, args.output)
+        return EXIT_SUCCESS
     human = [f"Vulnerability coverage — case {rec['id']}: "
              f"{report['covered']} covered, {report['available']} available, "
              f"{report['no_adapter']} without adapter (of {report['total']})"]
@@ -1188,6 +1204,40 @@ def cmd_surface(ctx: AppContext, args: argparse.Namespace) -> int:
         raise UsageError(f"Unknown surface subcommand '{args.surface_command}'")
     finally:
         db.close()
+
+
+def _make_coverage_planner(case_id: str, db):
+    """Coverage-driven planner: vuln-coverage blind spots become proposals.
+
+    Reads the case ledger once, hands the planner a bounded plan of the
+    un-probed classes; the proposals then flow through the SAME validation
+    (unknown action/param = rejection) and the broker's six gates as every
+    other planner path. Nothing here decides — the gates do.
+    """
+    from ..agent import Proposal
+    from ..intel.claims import ClaimLedger
+    from ..intel.vulncov import coverage_plan
+
+    ledger = ClaimLedger.load_from_db(db, case_id)
+    plan = coverage_plan(ledger, case_id)
+    proposals = [
+        Proposal(action=p["action"], target=p["target"],
+                 params=dict(p["params"]), reason=p["reason"])
+        for p in plan["proposals"]
+    ]
+    if not proposals:
+        raise UsageError(
+            "Coverage planner found nothing to propose",
+            reason="Every available class is already covered, or the case "
+                   "has no subjects to target.",
+            action="Run recon first (agent run <case> '<goal>') or check "
+                   "intel vuln-coverage.",
+        )
+
+    def coverage_planner(view):
+        return proposals
+
+    return coverage_planner
 
 
 def _make_planner(plan_text: str):
@@ -3326,6 +3376,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_ivc = intel_subs.add_parser("vuln-coverage", parents=[sub_common],
                                   help="vulnerability-class coverage matrix: what this case has probed vs blind spots")
     p_ivc.add_argument("case_id")
+    p_ivc.add_argument("--plan", action="store_true",
+                       help="turn blind spots into a concrete gated action plan")
+    p_ivc.add_argument("--max-plan", type=int, default=8,
+                       help="cap on planned actions (default 8)")
     p_ipb = intel_subs.add_parser("playbook", parents=[sub_common],
                                   help="hunt playbooks: reviewed multi-step recipes expanded into gated plans")
     ipb_subs = p_ipb.add_subparsers(dest="playbook_command", required=True)
@@ -3579,6 +3633,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_arun.add_argument("--max-actions", type=int, default=12)
     p_arun.add_argument("--llm", default="", metavar="MODEL",
                         help="use the LLM planner (AirLLM-mode) with this model")
+    p_arun.add_argument("--coverage", action="store_true",
+                        help="coverage-driven planner: audit the vuln-coverage blind spots for this case")
     p_aauto = agent_subs.add_parser("auto", parents=[sub_common],
                                     help="Autonomous Engineer: plan → execute → repair → forge missing tools (LLM self-sufficient)")
     p_aauto.add_argument("case_id")

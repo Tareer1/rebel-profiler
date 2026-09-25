@@ -50,6 +50,7 @@ _TOOL_BINARIES = {
     "nuclei": "url",
     "nikto": "url",
     "testssl.sh": "target",
+    "searchsploit": "query",
 }
 
 # Flags permitted per tool (first token of each pair). Anything else is
@@ -70,19 +71,21 @@ _TOOL_FLAGS: dict[str, tuple[str, ...]] = {
     "nuclei": ("-silent", "-severity", "-t", "-rl"),
     "nikto": ("-Format", "-port", "-ssl"),
     "testssl.sh": ("--quiet", "--openssl-timeout", "--starttls"),
+    "searchsploit": ("--json", "-t", "-j", "--exclude"),
 }
 
 # Value flags that consume a following value token.
 _VALUE_FLAGS = {
     "-t", "-p", "-T", "-m", "-w", "-c", "-h", "-4", "-6", "-rl",
     "--top-ports", "--version-intensity", "--rate", "--wait", "--scan",
-    "-Format", "-port", "--openssl-timeout", "-a",
+    "-Format", "-port", "--openssl-timeout", "-a", "--exclude",
 }
 
 _HOSTLIKE = re.compile(
     r"^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::\d{1,5})?$|"
     r"^\d{1,3}(?:\.\d{1,3}){3}(?:/\d{1,2})?$"
 )
+_QUERY = re.compile(r"[A-Za-z0-9 ._/-]{2,80}")
 _URLLIKE = re.compile(r"^https?://[A-Za-z0-9./:_-]{1,200}$")
 
 
@@ -156,12 +159,23 @@ class ToolExecAdapter(Adapter):
 
         kind = _TOOL_BINARIES[tool]
         argv = [tool, *validated]
-        if kind in {"target", "dns", "url"}:
+        if kind == "query":
+            # searchsploit: a LOCAL database query — the target names the
+            # search terms, is validated as text, and is passed through
+            query = _single_token(self._resolve_target(request),
+                                  field="query", pattern=_QUERY)
+            argv.append(query)
+        elif kind == "url":
+            # url-tools accept host OR full-URL targets; hosts are upgraded
+            # to a scheme-less scan the binary itself understands
+            target = self._resolve_target(request)
+            if not _URLLIKE.match(target):
+                _single_token(target, field="target", pattern=_HOSTLIKE)
+            argv.append(target)
+        elif kind in {"target", "dns"}:
             # the request.target itself is the primary target token
             target = self._resolve_target(request)
-            if kind == "url":
-                target = _single_token(target, field="target", pattern=_URLLIKE)
-            elif not _HOSTLIKE.match(target):
+            if not (_HOSTLIKE.match(target) or _URLLIKE.match(target)):
                 raise UsageError(
                     f"Target '{target}' does not look like a host/IP",
                     action="Pass the host, IP or CIDR the tool will touch.",

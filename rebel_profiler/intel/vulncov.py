@@ -32,6 +32,21 @@ VULN_CLASSES: tuple[VulnClass, ...] = (
               "CWE-79", ("web-crawl", "js-intel", "katana-crawl", "header-audit"),
               payload_class="reflected_xss",
               note="marker proves reflection; header audit shows CSP posture"),
+    VulnClass("server_misconfig", "Web-server misconfiguration (dangerous files, defaults)",
+              "CWE-16", ("nikto-scan", "web-crawl"),
+              note="nikto findings are misconfiguration evidence for the report"),
+    VulnClass("cms_exposure", "CMS/plugin exposure (WordPress core, plugins, backups)",
+              "CWE-1104", ("wpscan-audit", "tech-fingerprint"),
+              note="version + config-backup exposure; no brute force in this tool"),
+    VulnClass("published_exploit", "Published exploit availability (correlation only)",
+              "CWE-1395", ("exploit-lookup", "nuclei-scan", "vuln-correlate"),
+              note="offline EDB lookup — advisory; verification stays gated"),
+    VulnClass("plaintext_protocol", "Cleartext protocols observable on the segment",
+              "CWE-319", ("packet-capture", "service-detect"),
+              note="protocol aggregates only; capture is listen-only, own interface"),
+    VulnClass("host_hardening", "Local hardening baseline (own machine)",
+              "CWE-16", ("host-audit",),
+              note="lynis on the operator's own box — the blue-team half"),
     VulnClass("sqli", "SQL injection (error/boolean/time-based)",
               "CWE-89", ("param-hunt", "wayback-urls", "known-urls"),
               payload_class="sqli_error",
@@ -103,6 +118,88 @@ VULN_CLASSES: tuple[VulnClass, ...] = (
 
 def vuln_classes() -> tuple[VulnClass, ...]:
     return VULN_CLASSES
+
+
+# Actions that expect a URL-shaped target (scheme included). Every other
+# detect action is host/domain-shaped. Tests pin this split against the
+# live AdapterRegistry so a renamed action can never fall between sets.
+URL_TARGET_ACTIONS = frozenset({
+    "web-crawl",    "katana-crawl", "header-audit", "param-hunt", "dir-enum",
+    "js-intel", "nuclei-scan", "tech-fingerprint", "waf-detect",
+    "httpx-probe", "tls-posture", "nikto-scan", "wpscan-audit",
+})
+
+
+def coverage_plan(ledger, case_id: str, *, max_actions: int = 8) -> dict:
+    """Coverage blind spots → concrete, executable proposals.
+
+    The default next action after a first recon pass: every class the case
+    has NOT probed yet becomes a proposal naming a live action and a subject
+    the case already observed (URL-shaped subjects for URL actions, hosts
+    for the rest). Nothing here executes — the caller still passes these
+    through the same planner validation and the broker's six gates.
+
+    Returns {"proposals": [{action, target, params, reason}], "skipped":
+    [{class, action, why}], "plan_text": "action:target;..."} — plan_text is
+    a ready `agent run --plan` payload for the host/URL steps alike.
+    """
+    report = coverage_for_case(ledger, case_id)
+
+    url_subjects: list[str] = []
+    host_subjects: list[str] = []
+    seen: set[str] = set()
+    for claim in ledger.list(case_id):
+        subject = str(getattr(claim, "subject", "") or "")
+        if not subject or subject in seen:
+            continue
+        seen.add(subject)
+        if subject.startswith(("http://", "https://")):
+            url_subjects.append(subject)
+        else:
+            host_subjects.append(subject)
+
+    proposals: list[dict] = []
+    skipped: list[dict] = []
+    used: set[tuple[str, str]] = set()
+    for row in report["classes"]:
+        if row["status"] != "available":
+            continue
+        for action in row["detect_actions"]:
+            if action in row["probed"]:
+                continue
+            pool = url_subjects if action in URL_TARGET_ACTIONS else host_subjects
+            if not pool:
+                skipped.append({
+                    "class": row["class"], "action": action,
+                    "why": "no " + ("URL" if action in URL_TARGET_ACTIONS else "host")
+                           + " subject observed in this case yet",
+                })
+                continue
+            key = (action, pool[0])
+            if key in used:
+                continue
+            used.add(key)
+            proposals.append({
+                "action": action, "target": pool[0], "params": {},
+                "reason": f"coverage:{row['class']}",
+            })
+            if len(proposals) >= max_actions:
+                break
+        if len(proposals) >= max_actions:
+            break
+
+    plan_text = ";".join(f"{p['action']}:{p['target']}" for p in proposals)
+    return {
+        "schema_version": 1,
+        "case_id": case_id,
+        "proposals": proposals,
+        "skipped": skipped,
+        "plan_text": plan_text,
+        "rule": (
+            "Blind spots only (status=available); already-probed classes are "
+            "never re-proposed. Execution still passes the six gates."
+        ),
+    }
 
 
 def coverage_for_case(ledger, case_id: str) -> dict:

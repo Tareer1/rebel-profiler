@@ -612,6 +612,84 @@ def _bridge_state() -> dict:
 # suggestion the operator approves — the PoC stays human-owned.
 
 @operator_tool(
+    "collect",
+    "Run ONE whitelisted Kali action against an in-scope target through the "
+    "six gates and ingest the parsed claims (nikto-scan, wpscan-audit, "
+    "exploit-lookup, packet-capture, host-audit, port-scan, tech-fingerprint "
+    "…). High-risk actions land in the approval queue instead of running — "
+    "report that and let the operator decide.",
+    parameters={
+        "action": "the gated action name, e.g. nikto-scan or exploit-lookup",
+        "target": "in-scope target for the action (host, URL, or query)",
+        "params": "optional k=v pairs joined by ';' — e.g. 'port=443;ssl=1'",
+    },
+    required=("action", "target"),
+)
+def _collect(ctx, db, case_id, args, scope_engine=None):
+    from ..core.errors import RPError, UsageError
+    from ..evidence.store import EvidenceStore
+    from ..execution import ActionRequest
+    from ..execution.broker import AdapterRegistry
+    from ..intel.claims import ClaimLedger
+    from ..intel.collection import CollectionPipeline
+    from ..intel.sources import SourceRegistry
+
+    action = str(args["action"]).strip()
+    target = str(args["target"]).strip()
+    registry = AdapterRegistry()
+    adapter = registry.get(action)
+    if adapter is None:
+        raise UsageError(
+            f"action '{action}' has no adapter",
+            reason="the model can only propose live actions",
+            action=f"pick one of: {', '.join(registry.names())}")
+    row = db.get_case(case_id)
+    if row is not None and str(row["status"]) != "active":
+        raise UsageError(
+            f"case {case_id} is '{row['status']}', not active",
+            action="activate it first: case_activate")
+    params: dict = {}
+    for pair in str(args.get("params", "") or "").split(";"):
+        pair = pair.strip()
+        if not pair:
+            continue
+        key, _, value = pair.partition("=")
+        params[key.strip()] = value.strip()
+    request = ActionRequest(
+        case_id=case_id, capability=adapter.capability_class,
+        action=action, target=target, params=params,
+        requested_by=ctx.actor, reason="hermes collect",
+    )
+    result = ctx.broker(db).execute(request)
+    claims: list = []
+    if result.outcome == "succeeded":
+        pipeline = CollectionPipeline(
+            ClaimLedger(SourceRegistry()),
+            EvidenceStore(db, blobs_dir=ctx.case_dir(case_id) / "blobs"),
+            SourceRegistry(), db=db,
+        )
+        collection = pipeline.ingest(
+            case_id, action=result.action, target=result.target,
+            stdout=result.stdout, stderr=result.stderr,
+            returncode=result.returncode or 1,
+            task_id=result.task_id, evidence_id=result.evidence_id,
+            params=dict(params),
+        )
+        claims = collection.get("claims", [])
+    return {
+        "outcome": result.outcome,
+        "risk": result.decision.risk.level,
+        "policy": result.decision.outcome.value,
+        "evidence_id": result.evidence_id,
+        "task_id": result.task_id,
+        "claims": claims[:20],
+        "note": ("queued for operator approval — do NOT retry; tell the "
+                 "operator to decide via approval_list")
+                if result.outcome in {"queued", "approval_required"} else "",
+    }
+
+
+@operator_tool(
     "hunt_run",
     "Run the autonomous JS-surface hunt on one in-scope seed URL (case must "
     "be active). Mines scripts for endpoints, secrets and cloud hosts, folds "

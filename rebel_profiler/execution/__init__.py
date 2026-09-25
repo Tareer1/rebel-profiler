@@ -7,6 +7,20 @@ from .discovery import (
     ServiceDetectAdapter,
 )
 from .tool_exec import TOOL_EXEC_ADAPTERS, ToolExecAdapter
+from .hunters import (
+    ArjunAdapter,
+    GauAdapter,
+    HUNTER_ADAPTERS,
+    HttpxAdapter,
+    KatanaAdapter,
+    NucleiAdapter,
+    SubfinderAdapter,
+    NiktoAdapter,
+    WpscanAdapter,
+    SearchsploitAdapter,
+    TcpdumpCaptureAdapter,
+    LynisAuditAdapter,
+)
 from .adapters import (
     CertTransparencyAdapter,
     HeaderAuditAdapter,
@@ -34,6 +48,12 @@ from .broker import (
 __all__ = [
     "ActionRequest",
     "DISCOVERY_ADAPTERS",
+    "HUNTER_ADAPTERS",
+    "NiktoAdapter",
+    "WpscanAdapter",
+    "SearchsploitAdapter",
+    "TcpdumpCaptureAdapter",
+    "LynisAuditAdapter",
     "OsFingerprintAdapter",
     "PortScanAdapter",
     "ServiceDetectAdapter",

@@ -13,6 +13,11 @@ Adapters here:
   * :class:`KatanaAdapter`     — scope-aware JS/crawler endpoint discovery
   * :class:`GauAdapter`        — known-URLs from AlienVault/Wayback archives
   * :class:`ArjunAdapter`      — hidden HTTP parameter discovery (active)
+  * :class:`NiktoAdapter`      — web-server misconfiguration assessment
+  * :class:`WpscanAdapter`     — WordPress exposure audit (no brute force)
+  * :class:`SearchsploitAdapter` — offline exploit-db lookup (no traffic)
+  * :class:`TcpdumpCaptureAdapter` — bounded packet capture, own interface
+  * :class:`LynisAuditAdapter` — local hardening audit (blue-team half)
 
 Each adapter emits one output shape the collection pipeline already knows how
 to parse (``subdomain-enum`` lines, ``wayback-urls`` lines, or a small
@@ -206,6 +211,178 @@ class NucleiAdapter(Adapter):
         ]
 
 
+class NiktoAdapter(Adapter):
+    """Web-server assessment (nikto) against ONE authorized origin.
+
+    Nikto is an active scanner: its checks are misconfiguration-focused
+    (dangerous files, outdated software, header issues) and its default
+    tuning stays polite. Output is idempotent — the run either completes
+    or reports; nothing it prints is treated as an exploit. Format is
+    fixed to csv (deterministic parsing), idventions off (no mutation).
+    """
+
+    name = "nikto-scan"
+    binary = "nikto"
+    capability_class = "web_assessment"
+    allowed_params = ("port", "ssl", "timeout")
+    required_params = ()
+
+    _PORT = r"\d{1,5}"
+    _TIMEOUT = r"\d{1,3}"
+
+    def build_argv(self, request: ActionRequest) -> list[str]:
+        host = _single_token(request.target, field="host",
+                             pattern=r"[A-Za-z0-9.-]+")
+        port = _single_token(str(request.params.get("port", "443")),
+                             field="port", pattern=self._PORT)
+        if not (1 <= int(port) <= 65535):
+            raise UsageError(f"port out of range: {port}",
+                             action="Use 1-65535.")
+        ssl = str(request.params.get("ssl", ""))
+        if ssl not in {"", "0", "1"}:
+            raise UsageError(f"invalid ssl '{ssl[:20]}'",
+                             action="Use 1 for https, 0 or omit for http.")
+        timeout = _single_token(str(request.params.get("timeout", "30")),
+                                field="timeout", pattern=self._TIMEOUT)
+        if not (5 <= int(timeout) <= 120):
+            raise UsageError(f"timeout out of range: {timeout}",
+                             action="Use 5-120 seconds.")
+        argv = [self.binary, "-h", host, "-p", port,
+                "-Format", "csv", "-o", "-",
+                "-timeout", timeout, "-nointeractive", "-ask", "no"]
+        if ssl == "1":
+            argv.append("-ssl")
+        return argv
+
+
+class WpscanAdapter(Adapter):
+    """WordPress assessment (wpscan) against ONE authorized origin.
+
+    Passive/stealth mode only: no aggressive enumeration, no password
+    brute force (the tool has no wordlist path here), no plugin
+    dictionary attacks. Version and config-backup exposure checks are
+    the detection goal; API token is operator-supplied via env only.
+    """
+
+    name = "wpscan-audit"
+    binary = "wpscan"
+    capability_class = "web_assessment"
+    allowed_params = ("enumerate", "timeout")
+    required_params = ()
+
+    _ENUM = r"(?:vp|vt|cb|dbe)"   # vulnerable plugins/themes, backups, db exports
+
+    def build_argv(self, request: ActionRequest) -> list[str]:
+        url = _single_token(request.target, field="url", pattern=_URL)
+        enum = str(request.params.get("enumerate", "vp,vt")).strip()
+        if enum:
+            parts = [p.strip() for p in enum.split(",")]
+            for part in parts:
+                _single_token(part, field="enumerate",
+                              pattern=self._ENUM)
+            enum = ",".join(parts)
+        timeout = _single_token(str(request.params.get("timeout", "60")),
+                                field="timeout", pattern=_TIMEOUT)
+        if not (10 <= int(timeout) <= 300):
+            raise UsageError(f"timeout out of range: {timeout}",
+                             action="Use 10-300 seconds.")
+        argv = [self.binary, "--url", url, "--random-user-agent",
+                "--request-timeout", timeout, "--no-banner",
+                "--plugins-version-detection", "header"]
+        if enum:
+            argv += ["--enumerate", enum]
+        return argv
+
+
+class SearchsploitAdapter(Adapter):
+    """Offline exploit-db lookup (searchsploit) — ZERO target traffic.
+
+    A pure local database query on the operator's own Kali box: the
+    target is never contacted, so the risk stays low. Results become
+    advisory claims for later verification, never an execution path.
+    """
+
+    name = "exploit-lookup"
+    binary = "searchsploit"
+    capability_class = "passive_recon"
+    allowed_params = ("exclude",)
+    required_params = ()
+
+    _QUERY = r"[A-Za-z0-9 ._/-]{2,80}"
+
+    def build_argv(self, request: ActionRequest) -> list[str]:
+        query = _single_token(request.target, field="query",
+                              pattern=self._QUERY)
+        argv = [self.binary, "--json", "-t", query, "-j", "-"]
+        exclude = request.params.get("exclude")
+        if exclude:
+            exclude = _single_token(str(exclude), field="exclude",
+                                    pattern=self._QUERY)
+            argv += ["--exclude", exclude]
+        return argv
+
+
+class TcpdumpCaptureAdapter(Adapter):
+    """Packet capture (tcpdump) on the OPERATOR'S OWN interface.
+
+    Listen-only traffic observation for the assessment of the operator's
+    own segment: bounded by a packet count and a BPF filter whitelist so
+    a run can neither run away nor target another host actively (capture
+    receives; it never transmits to the target). Interface tokens are
+    validated like the wireless plane.
+    """
+
+    name = "packet-capture"
+    binary = "tcpdump"
+    capability_class = "network_mapping"
+    allowed_params = ("interface", "filter", "count")
+    required_params = ("interface",)
+
+    _IFACE = r"[A-Za-z0-9][A-Za-z0-9_-]{1,15}"
+    _FILTERS = frozenset({"arp", "icmp", "tcp", "udp", "port 53", "port 80",
+                          "port 443", "port 445", "broadcast"})
+
+    def build_argv(self, request: ActionRequest) -> list[str]:
+        iface = _single_token(request.params.get("interface", ""),
+                              field="interface", pattern=self._IFACE)
+        count = _single_token(str(request.params.get("count", "200")),
+                              field="count", pattern=r"\d{1,5}")
+        if not (1 <= int(count) <= 5000):
+            raise UsageError(f"count out of range: {count}",
+                             action="Capture 1-5000 packets.")
+        filter_ = str(request.params.get("filter", ""))
+        if filter_ and filter_ not in self._FILTERS:
+            raise UsageError(
+                f"BPF filter '{filter_[:40]}' is not whitelisted",
+                reason="Only named capture filters are offered — no free-form BPF.",
+                action=f"Pick one of: {', '.join(sorted(self._FILTERS))}",
+            )
+        argv = [self.binary, "-i", iface, "-c", count, "-nn", "-q"]
+        if filter_:
+            argv.append(filter_)
+        return argv
+
+
+class LynisAuditAdapter(Adapter):
+    """Local hardening audit (lynis) of the operator's OWN machine.
+
+    The blue-team counterpart: profiled, non-interactive, and pinned to
+    this host's filesystem (targetless by contract — lynis audits where
+    it runs). Every finding is defensive guidance, not an attack.
+    """
+
+    name = "host-audit"
+    binary = "lynis"
+    capability_class = "config_assessment"
+    allowed_params = ()
+    required_params = ()
+
+    def build_argv(self, request: ActionRequest) -> list[str]:
+        # target is informational (recorded, not passed): lynis is local-only
+        return [self.binary, "audit", "system", "--no-log", "--quick",
+                "--no-colors", "--plugin-dir", "/dev/null"]
+
+
 HUNTER_ADAPTERS: tuple[type[Adapter], ...] = (
     SubfinderAdapter,
     HttpxAdapter,
@@ -213,4 +390,9 @@ HUNTER_ADAPTERS: tuple[type[Adapter], ...] = (
     GauAdapter,
     ArjunAdapter,
     NucleiAdapter,
+    NiktoAdapter,
+    WpscanAdapter,
+    SearchsploitAdapter,
+    TcpdumpCaptureAdapter,
+    LynisAuditAdapter,
 )

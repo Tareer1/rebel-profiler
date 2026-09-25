@@ -614,7 +614,7 @@ machine-specific install commands.
 
 ## Status
 
-Current release: **v1.5.0** — the suite stands at 1000+ tests passing, CI
+Current release: **v1.5.0** — the suite stands at 1050+ tests passing, CI
 green. Phases 1–6 complete: core foundation, OSINT/recon intelligence,
 surface & fusion, case workflows/RBAC, platform integrations (worker plane,
 browser bridge, Feature Forge, complaint packages) and QA acceptance. The
@@ -627,7 +627,12 @@ device inventory and the **wireless plane** (`wlan-survey`, `wlan-monitor`,
 `wlan-ap-audit`: authorized-site 802.11 posture audits — listen-only,
 approval-gated monitor mode, client-probe SSIDs never recorded;
 `--privileged` wraps only airmon-ng/airodump-ng via whitelisted sudo for
-non-root operators). See
+non-root operators). The **Kali tool surface** now spans 40 gated actions:
+nikto, wpscan (no brute force), offline searchsploit correlation, own-
+interface tcpdump aggregates and the lynis blue-team baseline all sit
+behind the same six gates, with coverage-driven planning
+(`intel vuln-coverage --plan`, `agent run --coverage`) turning coverage
+blind spots into the default next action. See
 [ROADMAP.md](ROADMAP.md) for the shipped checklist and
 [ARCHITECTURE.md](ARCHITECTURE.md) for the plane model and data flow.
 

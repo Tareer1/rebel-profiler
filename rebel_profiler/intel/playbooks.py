@@ -179,6 +179,26 @@ def builtin_playbooks() -> tuple[Playbook, ...]:
                ("wlan-ap-audit", {},
                 "offline posture summary: WEP/TKIP/open APs become findings"),
            ]),
+        pb("web-deep-audit", "1", "Deep web assessment: misconfig, CMS, published exploits",
+           "rebel-profiler core", ["web", "misconfig", "cms"], [
+               ("tech-fingerprint", {},
+                "identify the stack first — CMS detection decides the wpscan step"),
+               ("nikto-scan", {"port": "443", "ssl": "1"},
+                "server misconfiguration sweep: defaults, outdated software, methods"),
+               ("wpscan-audit", {},
+                "WordPress exposure (harmless no-op when the origin is not WP)"),
+               ("exploit-lookup", {},
+                "offline EDB correlation for the fingerprinted product+version"),
+               ("nuclei-scan", {"severity": "medium,high,critical"},
+                "template validation of what the sweep actually flagged"),
+           ]),
+        pb("own-box-baseline", "1", "Operator's own machine hardening baseline (blue-team)",
+           "rebel-profiler core", ["hardening", "defense"], [
+               ("host-audit", {},
+                "lynis baseline of THIS box: every suggestion is a hardening claim"),
+               ("packet-capture", {"interface": "eth0", "filter": "tcp", "count": "300"},
+                "protocol aggregates on the own segment: cleartext stands out"),
+           ]),
     )
 
 
