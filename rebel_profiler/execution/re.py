@@ -143,8 +143,10 @@ class SymbolDumpAdapter(Adapter):
     def build_argv(self, request: ActionRequest) -> list[str]:
         path = _validate_sample_path(request.target)
         defined = request.params.get("defined_only")
-        argv = [self.binary, "-D", "--defined-only" if str(defined) in
-                {"1", "true", "yes"} else "--wide", path]
+        argv = [self.binary, "-D"]
+        if str(defined) in {"1", "true", "yes"}:
+            argv.append("--defined-only")
+        argv.append(path)
         return argv
 
 
