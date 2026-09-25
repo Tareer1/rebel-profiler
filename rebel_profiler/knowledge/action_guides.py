@@ -519,6 +519,61 @@ _ACTION_GUIDES: tuple[ActionGuide, ...] = (
         reads_output="Round-trips the payload; useful in verification sessions only.",
         next_steps=(),
     ),
+    # ------------------------------------------------------ wireless (authorized site)
+    ActionGuide(
+        action="wlan-survey",
+        capability_class="wireless_observation",
+        when=("You need the RF picture of an AUTHORIZED site: APs, channels, "
+              "encryption posture, associated clients (airodump-ng listen-only).",
+              "Rogue-AP hunting and legacy-encryption (WEP/TKIP) detection "
+              "start here. Requires a monitor-mode interface."),
+        target_shape="the site label the survey belongs to (any short slug; "
+                     "the interface comes from params)",
+        target_example="office-floor-2",
+        params=(("interface", "REQUIRED: monitor-mode interface, e.g. wlan0mon"),
+                ("duration", "capture seconds 60–3600, default 120"),
+                ("channel", "optional: lock one channel 1–196 instead of hopping"),
+                ("band", "optional: a | b | g | n | abg | bg")),
+        example={"action": "wlan-survey", "target": "office-floor-2",
+                 "params": {"interface": "wlan0mon", "duration": "300"}},
+        output_claims=("ap", "wifi_security", "wireless_sta"),
+        reads_output=("Each AP becomes an ap claim (BSSID, channel, ESSID); "
+                      "encryption posture becomes wifi_security; client MACs "
+                      "become wireless_sta with association only — probe SSID "
+                      "privacy is preserved, probes are never recorded."),
+        next_steps=("wlan-ap-audit",),
+    ),
+    ActionGuide(
+        action="wlan-monitor",
+        capability_class="wireless_monitor",
+        when=("You need an interface switched into (or out of) monitor mode "
+              "before a survey — airmon-ng start/stop."),
+        target_shape="the site label or machine tag the interface belongs to",
+        target_example="operator-laptop",
+        params=(("interface", "REQUIRED: the wireless interface, e.g. wlan0"),
+                ("stop", "set to return the interface to managed mode")),
+        example={"action": "wlan-monitor", "target": "operator-laptop",
+                 "params": {"interface": "wlan0"}},
+        output_claims=(),
+        reads_output=("State change on the OPERATOR'S OWN machine only — never "
+                      "a target. Approval-gated by policy; nothing here "
+                      "transmits toward any other device."),
+        next_steps=("wlan-survey",),
+    ),
+    ActionGuide(
+        action="wlan-ap-audit",
+        capability_class="passive_recon",
+        when=("You want the encryption-posture summary of an already-captured "
+              "survey without touching the RF environment again — offline "
+              "analysis of the case's own evidence."),
+        target_shape="the site label used for the original survey",
+        target_example="office-floor-2",
+        example={"action": "wlan-ap-audit", "target": "office-floor-2"},
+        output_claims=("wifi_security",),
+        reads_output=("Pure offline analysis: WEP/TKIP/open APs surface as "
+                      "reportable posture findings; nothing is transmitted."),
+        next_steps=("header-audit",),
+    ),
 )
 
 _GUIDES: dict[str, ActionGuide] = {g.action: g for g in _ACTION_GUIDES}

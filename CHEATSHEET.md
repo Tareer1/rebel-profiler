@@ -38,7 +38,7 @@ ln -sf "<repo>/tools/rp" ~/.local/bin/rp && export PATH="$HOME/.local/bin:$PATH"
 ## 0b. `rp` — one command, everything by prompting (the daily driver)
 
 `tools/rp` + `rebel-profiler hermes` is the whole CLI reduced to a
-cconversation. The session case is picked (or created) automatically, the
+conversation. The session case is picked (or created) automatically, the
 pinned Hermes model from `hermes.toml` loads, and the model holds the full
 operator tool surface — case create/activate, scope add/show, claims,
 report generation, evidence + audit verification, surface/fusion, search,
@@ -96,6 +96,31 @@ Everything the chat does is the same gated machinery as the full CLI below
 — six gates, scope engine, evidence chain, audit trail — it only hides the
 ceremony. The raw `rebel-profiler` commands stay the source of truth for
 scripting and CI.
+
+## 0d. Wireless (authorized-site 802.11 posture — listen-only)
+
+```bash
+# One command runs the whole chain: monitor mode (approval-gated) →
+# bounded RF survey → restore managed mode → offline posture audit:
+rebel-profiler intel playbook run wifi-posture <case-id> office-floor-2
+
+# Or step by step:
+rebel-profiler run <case-id> wlan-monitor operator-laptop \
+    -p interface wlan0                       # approval-gated (own machine)
+rebel-profiler run <case-id> wlan-survey office-floor-2 \
+    -p interface wlan0mon -p duration 300    # listen-only survey
+rebel-profiler run <case-id> wlan-monitor operator-laptop \
+    -p interface wlan0mon -p stop 1          # back to managed mode
+rebel-profiler run <case-id> wlan-ap-audit office-floor-2  # offline summary
+```
+
+APs become `ap` claims (BSSID, channel, ESSID), encryption posture becomes
+`wifi_security` (WEP/TKIP/open = reportable), associated clients become
+`wireless_sta` — association-only: probe SSIDs are NEVER recorded.
+Deauth/evil-twin/injection actions do not exist in this tool by design:
+detection, not disruption. RF surveys require written authorization for
+the PHYSICAL site — the case scope gates hosts; the operator gates the
+spectrum.
 
 ## 1. Case lifecycle (every job starts here)
 

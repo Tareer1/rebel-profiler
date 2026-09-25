@@ -39,6 +39,10 @@ MAX_DEPTH_DEFAULT = 2
 MAX_BODY_BYTES = 512_000
 
 _FETCH_TIMEOUT = 30
+# Politeness floor: minimum seconds between two fetches of the SAME host.
+# A crawl is an active interaction with the target; the tool's own discipline
+# ("polite timing, no denial-of-service") applies to it too.
+MIN_HOST_DELAY_SECONDS = 1.0
 
 _SECURITY_HEADERS = {
     "content-security-policy": "CSP",
@@ -102,13 +106,31 @@ class PageAudit:
         }
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse automatic redirect following.
+
+    urllib follows redirects by default — including to hosts OUTSIDE the case
+    scope, which would make the mechanical scope gate a lie: the bytes of an
+    out-of-scope host would still enter the evidence ledger. Redirects are
+    instead surfaced as a header finding (``redirect_cleartext`` handles the
+    http:// case; ``redirect_off_scope`` the cross-host case handled by the
+    auditor) and never auto-followed.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: N802
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def _default_fetch(url: str) -> tuple[int, dict[str, str], bytes]:
-    """Fetch a URL with a bounded timeout; returns (status, headers, body)."""
+    """Fetch ONE URL, never following redirects (scope-safe)."""
     request = urllib.request.Request(
         url, headers={"User-Agent": "rebel-profiler-auditor/0.1"},
     )
     try:
-        with urllib.request.urlopen(request, timeout=_FETCH_TIMEOUT) as response:
+        with _OPENER.open(request, timeout=_FETCH_TIMEOUT) as response:
             body = response.read(MAX_BODY_BYTES)
             return response.status, dict(response.headers.items()), body
     except urllib.error.HTTPError as exc:
@@ -178,6 +200,7 @@ class ScopeEnforcedWebAuditor:
         self.max_pages = max_pages
         self.max_depth = max_depth
         self._db = db
+        self._last_fetch_at: dict[str, float] = {}
 
     # -- scope gate ---------------------------------------------------------
 
@@ -214,7 +237,26 @@ class ScopeEnforcedWebAuditor:
                 "check": "redirect_cleartext", "status": "finding",
                 "detail": f"redirects to {location}",
             })
+        # Redirects are never followed (see _NoRedirect) — but a Location
+        # header pointing OUTSIDE the case scope is itself a finding worth
+        # recording: it exposes an off-scope trust relationship.
+        if location and self._host_out_of_scope(location):
+            checks.append({
+                "check": "redirect_off_scope", "status": "finding",
+                "detail": f"redirects to out-of-scope host {location}",
+            })
         return checks
+
+    def _host_out_of_scope(self, location: str) -> bool:
+        """True when a Location header target's host fails the case scope."""
+        host = (urlparse(location).hostname or "").lower().rstrip(".")
+        if not host:
+            return False
+        try:
+            self.scope_engine.validate(self.case_id, host)
+        except ScopeViolationError:
+            return True
+        return False
 
     def _audit_cookies(self, headers: dict[str, str]) -> list[dict]:
         checks: list[dict] = []
@@ -287,6 +329,13 @@ class ScopeEnforcedWebAuditor:
             if normalized in seen:
                 continue
             seen.add(normalized)
+            # Politeness: never hit the same host faster than the floor.
+            host = (urlparse(url).hostname or "").lower()
+            now = time.time()
+            wait = self._last_fetch_at.get(host, 0.0) + MIN_HOST_DELAY_SECONDS - now
+            if wait > 0:
+                time.sleep(wait)
+            self._last_fetch_at[host] = time.time()
             try:
                 status, headers, body = self.fetch(url)
             except UsageError as exc:

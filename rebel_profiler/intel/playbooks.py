@@ -168,6 +168,17 @@ def builtin_playbooks() -> tuple[Playbook, ...]:
                ("port-scan", {"ports": "22,80,443,8080"},
                 "management and web surfaces on the found devices"),
            ]),
+        pb("wifi-posture", "1", "Authorized-site Wi-Fi posture audit (listen-only)",
+           "rebel-profiler core", ["wireless", "wifi"], [
+               ("wlan-monitor", {},
+                "bring the operator's OWN interface into monitor mode (approval-gated)"),
+               ("wlan-survey", {"duration": "300"},
+                "bounded RF survey: APs, channels, encryption posture, associations"),
+               ("wlan-monitor", {"stop": "1"},
+                "restore managed mode — the machine goes back to normal"),
+               ("wlan-ap-audit", {},
+                "offline posture summary: WEP/TKIP/open APs become findings"),
+           ]),
     )
 
 

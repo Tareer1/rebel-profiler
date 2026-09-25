@@ -89,6 +89,15 @@ VULN_CLASSES: tuple[VulnClass, ...] = (
               "CWE-319", ("smb-enum", "port-scan", "service-detect")),
     VulnClass("net_topology", "Segmentation / routing exposure",
               "CWE-1004", ("route-analysis", "host-discovery")),
+    VulnClass("wifi_legacy_encryption", "Legacy Wi-Fi encryption (WEP/TKIP/open)",
+              "CWE-327", ("wlan-survey", "wlan-ap-audit"),
+              note="observation-only: the posture claim IS the finding"),
+    VulnClass("wifi_rogue_ap", "Rogue / unknown access points on an authorized site",
+              "CWE-940", ("wlan-survey",),
+              note="unknown BSSID vs the asset register is the reportable gap"),
+    VulnClass("wifi_privacy_surface", "Client privacy surface (STA exposure, probe hygiene)",
+              "CWE-200", ("wlan-survey",),
+              note="association-only records; probe SSIDs never captured"),
 )
 
 

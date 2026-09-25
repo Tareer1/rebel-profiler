@@ -29,6 +29,24 @@ from .injection import scan_injection, sanitize_external
 from .normalize import canonical_hostname
 from .sources import SourceRegistry
 
+
+def _parse_wireless_survey(stdout: str, stderr: str = "") -> list[tuple[str, str]]:
+    """Collect airodump CSV pairs from a survey run's captured streams.
+
+    airodump-ng writes the CSV file (rp_survey-01.csv) rather than stdout;
+    both the file contents (when a runner merged it) and any stdout echo are
+    accepted. Parsing is the same deterministic CSV discipline as every
+    other parser: unknown lines yield nothing.
+    """
+    from ..execution.wireless import parse_airodump_csv
+
+    pairs: list[tuple[str, str]] = []
+    for stream in (stdout, stderr):
+        if "First time seen" in stream or "BSSID" in stream:
+            pairs.extend(parse_airodump_csv(stream))
+    return pairs
+
+
 _WHOIS_KV = re.compile(r"^\s*([A-Za-z][A-Za-z0-9 _-]{0,40}?):\s*(\S.{0,200})$")
 _NMAP_PORT = re.compile(
     r"^(\d{1,5})/(tcp|udp)\s+(open|filtered|closed)\s*(\S+)?(?:\s+(.*))?$"
@@ -939,6 +957,8 @@ class CollectionPipeline:
             pairs = _parse_header_head(stdout)
         elif effective_action == "tls-posture":
             pairs = _parse_sslscan(stdout)
+        elif effective_action == "wlan-survey":
+            pairs = _parse_wireless_survey(stdout, stderr)
         else:
             pairs = []
 
@@ -1015,6 +1035,9 @@ class CollectionPipeline:
             "nuclei-scan": "scan.nuclei",
             "header-audit": "scan.web",
             "tls-posture": "scan.tls",
+            "wlan-survey": "scan.wireless",
+            "wlan-monitor": "scan.wireless",
+            "wlan-ap-audit": "scan.wireless",
             "probe": "scan.web",
         }.get(action, "unknown")
 

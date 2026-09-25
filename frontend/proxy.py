@@ -196,6 +196,34 @@ class ProxyHandler(BaseHTTPRequestHandler):
     rp_binary: str = "rebel-profiler"
     frontend_dir: str = ""
 
+    # -- hardening -------------------------------------------------------------
+
+    def _origin_ok(self) -> bool:
+        """Strict same-origin check for state-changing calls (POST /api/cli).
+
+        The GUI is local-only, but a malicious page in ANY other tab can fire
+        cross-origin POSTs at 127.0.0.1 unless the proxy refuses them. Browsers
+        always send Origin on cross-site POSTs; localhost GET navigation may
+        omit it, so GETs stay allowed and POSTs fail closed.
+        """
+        origin = self.headers.get("Origin", "")
+        if not origin:
+            return True   # same-origin form posts may omit Origin entirely
+        host = self.headers.get("Host", "")
+        return origin in {f"http://{host}", f"http://127.0.0.1:{self.server.server_address[1]}",
+                          f"http://localhost:{self.server.server_address[1]}"}
+
+    def _security_headers(self) -> None:
+        """Baseline hardening headers on every response."""
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Content-Security-Policy",
+                         "default-src 'self' 'unsafe-inline'; "
+                         "connect-src 'self'; img-src 'self' data:; "
+                         "frame-ancestors 'none'; form-action 'self'")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Cache-Control", "no-store")
+
     # -- helpers ------------------------------------------------------------
 
     def _json(self, code: int, data) -> None:
@@ -203,8 +231,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        self._security_headers()
         # Local-only GUI: allow file:// or any localhost page to call the proxy.
+        # (State-changing POSTs are gated separately by _origin_ok.)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
@@ -242,6 +271,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self._security_headers()
         self.end_headers()
         self.wfile.write(body)
 
@@ -306,6 +336,12 @@ class ProxyHandler(BaseHTTPRequestHandler):
         if self.path.split("?", 1)[0] != "/api/cli":
             self._json(405, {"error": "method not allowed", "allowed": ["GET"]})
             return
+        # CSRF / cross-origin hardening: a page from another origin (even
+        # another localhost port) never drives the whitelist.
+        if not self._origin_ok():
+            self._json(403, {"error": "cross-origin request refused",
+                             "action": "Use the GUI served by this proxy."})
+            return
         length = int(self.headers.get("Content-Length", "0") or "0")
         if length > 65536:
             self._json(413, {"error": "payload too large"})
@@ -352,6 +388,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Connection", "close")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
 

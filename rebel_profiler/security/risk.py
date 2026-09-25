@@ -19,6 +19,12 @@ _CAPABILITY_RISK = {
     "network_mapping": "moderate",
     "web_assessment": "moderate",
     "config_assessment": "moderate",
+    # RF observation (airodump listening) — passive toward every target:
+    # the radio receives, it never transmits attack traffic.
+    "wireless_observation": "moderate",
+    # Monitor-mode transition changes the OPERATOR'S OWN machine state, so
+    # it deliberately sits above observation and needs an approval.
+    "wireless_monitor": "high",
     "active_recon": "high",
     "vuln_validation": "high",
     "intrusive_testing": "high",

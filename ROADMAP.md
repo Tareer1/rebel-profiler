@@ -290,12 +290,31 @@ weakening a single gate. Every item keeps the Phase 1 invariants.
   CIDR-inert and can never silently widen); `nmap -sn` sweeps parse into
   per-host `lan_device` claims with MAC + OUI vendor; the `lan-inventory`
   playbook runs sweep + management-port scan through the normal six gates
+- [x] **Wireless plane (authorized-site 802.11 posture)**: `wlan-survey`
+  (airodump-ng listen-only RF survey, bounded duration, band/channel
+  whitelists), `wlan-monitor` (airmon-ng start/stop on the operator's OWN
+  interface — the only state-changing wireless action, approval-gated via
+  the `wireless_monitor` capability class) and `wlan-ap-audit` (offline
+  posture summary). Airodump CSV parses into `ap`, `wifi_security` and
+  `wireless_sta` claims — association-only: client probe SSIDs are NEVER
+  recorded. Injection/attack modes (deauth, evil-twin, aireplay) are
+  deliberately absent: detection, not disruption. The `wifi-posture`
+  playbook chains monitor → survey → restore → audit; three
+  `wifi_*` vulnerability-coverage rows and action guides ship with it
+- [x] **Crawler scope discipline**: the web auditor's fetcher never follows
+  redirects automatically (urllib's default follow would silently fetch
+  out-of-scope hosts); a Location header pointing outside the case scope
+  is recorded as a `redirect_off_scope` finding instead, and a per-host
+  politeness floor keeps the crawl a polite citizen on the target
 - [ ] **Coverage-driven planning**: feed `intel vuln-coverage` blind spots
   straight into the planner so "audit what you have not covered yet"
   becomes the default next action, not a manual choice
-- [ ] **GUI hardening pass**: CSP headers + a strict origin check on the
-  local proxy, and a session-kill button that closes the gateway, proxy and
-  browser bridge together
+- [x] **GUI hardening pass (part 1)**: CSP + baseline hardening headers
+  (nosniff, DENY framing, no-referrer) on every proxy response, and a
+  strict origin check that refuses cross-origin POSTs to the whitelisted
+  CLI surface — a malicious tab can no longer drive the whitelist. Still
+  open: a session-kill button that closes the gateway, proxy and browser
+  bridge together
 - [ ] **Windows/WSL support matrix**: doctor + adapters verified under WSL2
   with the same Kali toolset, gaps documented honestly (some hunter
   binaries have no Windows build)

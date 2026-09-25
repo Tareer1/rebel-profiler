@@ -258,3 +258,53 @@ class TestProxyHTTP:
         except urllib.error.HTTPError as exc:
             status = exc.code
         assert status == 400
+
+
+class TestProxyHardening:
+    """CSRF/origin discipline + baseline security headers."""
+
+    def test_post_from_foreign_origin_is_refused(self, proxy_server):
+        req = urllib.request.Request(
+            proxy_server + "/api/cli",
+            data=json.dumps({"cmd": "case_list"}).encode(),
+            headers={"Content-Type": "application/json",
+                     "Origin": "http://evil.example"},
+            method="POST")
+        try:
+            urllib.request.urlopen(req, timeout=5)
+            status = 200
+        except urllib.error.HTTPError as exc:
+            status = exc.code
+            body = exc.read().decode()
+        else:
+            body = ""
+        assert status == 403
+        assert "cross-origin" in body
+
+    def test_post_with_same_origin_is_allowed(self, proxy_server):
+        port = proxy_server.rsplit(":", 1)[1]
+        req = urllib.request.Request(
+            proxy_server + "/api/cli",
+            data=json.dumps({"cmd": "case_list"}).encode(),
+            headers={"Content-Type": "application/json",
+                     "Origin": f"http://127.0.0.1:{port}"},
+            method="POST")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            assert resp.status == 200
+
+    def test_post_without_origin_is_allowed(self, proxy_server):
+        status, payload = _post(proxy_server + "/api/cli", {"cmd": "case_list"})
+        assert status == 200
+
+    def test_security_headers_on_static_gui(self, proxy_server):
+        with urllib.request.urlopen(proxy_server + "/", timeout=5) as resp:
+            assert resp.headers.get("X-Content-Type-Options") == "nosniff"
+            assert resp.headers.get("X-Frame-Options") == "DENY"
+            csp = resp.headers.get("Content-Security-Policy", "")
+            assert "frame-ancestors 'none'" in csp
+            assert resp.headers.get("Referrer-Policy") == "no-referrer"
+
+    def test_security_headers_on_json_api(self, proxy_server):
+        with urllib.request.urlopen(proxy_server + "/healthz", timeout=5) as resp:
+            assert resp.headers.get("X-Content-Type-Options") == "nosniff"
+            assert resp.headers.get("X-Frame-Options") == "DENY"

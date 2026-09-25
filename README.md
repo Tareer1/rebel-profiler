@@ -614,12 +614,18 @@ machine-specific install commands.
 
 ## Status
 
-Current release: **v1.4.0** — 858 tests passing, CI green. Phases 1–6
-complete: core foundation, OSINT/recon intelligence, surface &
-fusion, case workflows/RBAC, platform integrations (worker plane, browser
-bridge, Feature Forge, complaint packages) and QA acceptance. The browser
-console (`frontend/`) ships in Phase 9: a local-only GUI over the read-only
-gateway and the whitelisted JSON CLI. See
+Current release: **v1.5.0** — the suite stands at 1000+ tests passing, CI
+green. Phases 1–6 complete: core foundation, OSINT/recon intelligence,
+surface & fusion, case workflows/RBAC, platform integrations (worker plane,
+browser bridge, Feature Forge, complaint packages) and QA acceptance. The
+browser console (`frontend/`) ships in Phase 9: a local-only GUI over the
+read-only gateway and the whitelisted JSON CLI — hardened with strict
+origin checks and CSP baseline headers. Phase 11/12 additions include the
+offense plane (attack-plan engine, payload workbench, vulnerability-
+coverage matrix), hunt playbooks, SARIF/Markdown report export, own-LAN
+device inventory and the **wireless plane** (`wlan-survey`, `wlan-monitor`,
+`wlan-ap-audit`: authorized-site 802.11 posture audits — listen-only,
+approval-gated monitor mode, client-probe SSIDs never recorded). See
 [ROADMAP.md](ROADMAP.md) for the shipped checklist and
 [ARCHITECTURE.md](ARCHITECTURE.md) for the plane model and data flow.
 

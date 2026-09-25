@@ -226,6 +226,12 @@ def _default_adapter_classes() -> tuple[type[Adapter], ...]:
     except ImportError:  # pragma: no cover
         pass
     try:
+        from .wireless import WIRELESS_ADAPTERS
+
+        classes.extend(WIRELESS_ADAPTERS)
+    except ImportError:  # pragma: no cover
+        pass
+    try:
         from .tool_exec import TOOL_EXEC_ADAPTERS
 
         classes.extend(TOOL_EXEC_ADAPTERS)

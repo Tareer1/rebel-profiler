@@ -117,6 +117,7 @@ DEFAULT_SOURCES: tuple[Source, ...] = (
     Source("scan.nmap", "scan", "a1", 1.0, "local scan", "protocol answer from the target itself"),
     Source("scan.tool", "scan", "b2", 1.0, "whitelisted tool", "exec-tool run through the broker"),
     Source("scan.web", "scan", "b2", 0.9, "web-layer tool", "whatweb/wafw00f/ffuf/probe view of the web origin"),
+    Source("scan.wireless", "scan", "b2", 0.9, "RF observation", "airodump-ng CSV view of the 2.4/5 GHz band (authorized site)"),
     Source("js.static", "static", "b2", 0.8, "target-served JavaScript", "extracted from content the target ships; may reference stale or third-party URLs"),
     Source("archive.wayback", "archive", "c3", 0.7, "Wayback Machine", "historical snapshot index; URLs may be dead or never have been on the target"),
     Source("search.engine", "osint", "c3", 0.8, "third party index", "engine's view of the target, may be stale or poisoned"),

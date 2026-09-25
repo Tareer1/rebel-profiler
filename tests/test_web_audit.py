@@ -286,3 +286,66 @@ class TestWebClaimsAndCLI:
         assert rc == 0
         out = capsys.readouterr().out
         assert "header" in out
+
+
+class TestRedirectScopeDiscipline:
+    """Redirects must never widen the mechanical scope gate."""
+
+    def test_default_fetch_never_follows_redirects(self):
+        """302 → out-of-scope host must surface as a 302, not fetch the target."""
+        import urllib.error
+
+        from rebel_profiler.intel.web import _default_fetch
+
+        # urlopen against a non-routable test address would hang; instead
+        # verify structurally: the module's opener has a handler that returns
+        # None (redirect refused) — the contract the crawler relies on.
+        from rebel_profiler.intel.web import _OPENER, _NoRedirect
+
+        handlers = [h for h in _OPENER.handlers if isinstance(h, _NoRedirect)]
+        assert handlers, "opener must install the no-redirect handler"
+        assert handlers[0].redirect_request(None, None, 302, "x", {}, "") is None
+        assert handlers[0].redirect_request(None, None, 301, "x", {}, "") is None
+
+    def test_off_scope_redirect_header_is_a_finding(self, tmp_path):
+        """A Location header to an out-of-scope host is recorded, not followed."""
+        headers = dict(SECURE_HEADERS)
+        headers["Location"] = "https://evil.test/next"
+        _, _, auditor = make_auditor(
+            tmp_path,
+            fetch=lambda url: (302, headers, b""),
+        )
+        report = auditor.crawl(["https://h1.lab.example.test/"])
+        checks = report["pages"][0]["checks"]
+        assert any(
+            c["check"] == "redirect_off_scope" and c["status"] == "finding"
+            and "evil.test" in c["detail"]
+            for c in checks
+        )
+
+    def test_in_scope_redirect_header_not_flagged_off_scope(self, tmp_path):
+        headers = dict(SECURE_HEADERS)
+        headers["Location"] = "https://h2.lab.example.test/next"
+        _, _, auditor = make_auditor(
+            tmp_path,
+            fetch=lambda url: (302, headers, b""),
+        )
+        report = auditor.crawl(["https://h1.lab.example.test/"])
+        checks = report["pages"][0]["checks"]
+        assert not any(c["check"] == "redirect_off_scope" for c in checks)
+
+    def test_same_host_refetch_respects_politeness_floor(self, tmp_path):
+        """Two pages on one host are never fetched back-to-back instantly."""
+        import time as _time
+
+        stamps: list[float] = []
+
+        def timed_fetch(url):
+            stamps.append(_time.monotonic())
+            return 200, dict(SECURE_HEADERS), HTML_PAGE
+
+        _, _, auditor = make_auditor(tmp_path, fetch=timed_fetch)
+        auditor.crawl(["https://h1.lab.example.test/"], collect_claims=False)
+        assert len(stamps) == 2
+        gap = stamps[1] - stamps[0]
+        assert gap >= 0.5, f"second fetch came too fast: {gap}s"
