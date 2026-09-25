@@ -530,6 +530,12 @@ class ExecutionBroker:
     def _default_runner(argv: list[str]) -> tuple[int, str, str]:
         import subprocess
 
+        if not argv:
+            raise UsageError(
+                "Empty argv — nothing to run",
+                reason="The runner received an empty command vector.",
+                action="This is a bug: report the action that produced it.",
+            )
         try:
             proc = subprocess.run(
                 argv, capture_output=True, text=True, timeout=300, check=False,

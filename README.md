@@ -625,7 +625,9 @@ offense plane (attack-plan engine, payload workbench, vulnerability-
 coverage matrix), hunt playbooks, SARIF/Markdown report export, own-LAN
 device inventory and the **wireless plane** (`wlan-survey`, `wlan-monitor`,
 `wlan-ap-audit`: authorized-site 802.11 posture audits — listen-only,
-approval-gated monitor mode, client-probe SSIDs never recorded). See
+approval-gated monitor mode, client-probe SSIDs never recorded;
+`--privileged` wraps only airmon-ng/airodump-ng via whitelisted sudo for
+non-root operators). See
 [ROADMAP.md](ROADMAP.md) for the shipped checklist and
 [ARCHITECTURE.md](ARCHITECTURE.md) for the plane model and data flow.
 

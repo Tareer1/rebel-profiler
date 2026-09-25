@@ -724,7 +724,7 @@ def _cmd_intel_vuln_coverage(ctx: AppContext, args: argparse.Namespace) -> int:
 
 
 def _cmd_intel_attack_plan(ctx: AppContext, args: argparse.Namespace) -> int:
-    """"isko hack karne ke tarike dundo": ranked strategies from evidence."""
+    """Ranked, evidence-driven offensive strategies from the case ledger."""
     from ..intel.offense import attack_plan
 
     rec = ctx.find_case(args.case_id)
@@ -3173,6 +3173,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub_common.add_argument("--yes", "-y", action="store_true", default=argparse.SUPPRESS)
     sub_common.add_argument("--actor", default=argparse.SUPPRESS)
     sub_common.add_argument("--rbac", action="store_true", default=argparse.SUPPRESS)
+    sub_common.add_argument("--privileged", action="store_true", default=argparse.SUPPRESS,
+                            help="allow the RF tools (airmon-ng/airodump-ng) to run via sudo -n — "
+                                 "Kali wireless workflows need root; the argv whitelist is unchanged")
     sub_common.add_argument("--config-file", default=argparse.SUPPRESS)
     sub_common.add_argument("--data-dir", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
 
@@ -3917,6 +3920,7 @@ def main(argv: list[str] | None = None) -> int:
             rbac_enabled=getattr(args, "rbac", False),
             queue_on_approval_refusal=True,
             profile_path=getattr(args, "config_file", None),
+            privileged_runner=bool(getattr(args, "privileged", False)),
         )
     except RPError as exc:
         # A bad --config-file must fail like every other error: structured,

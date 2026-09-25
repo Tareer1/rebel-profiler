@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -25,7 +26,8 @@ class AppContext:
     def __init__(self, *, data_dir: Path | None = None, assume_yes: bool = False,
                  actor: str | None = None, rbac_enabled: bool = False,
                  queue_on_approval_refusal: bool = False,
-                 profile_path: str | None = None) -> None:
+                 profile_path: str | None = None,
+                 privileged_runner: bool = False) -> None:
         self.config = load_config(profile_path=profile_path)
         configured = get(self.config, "paths.data_dir", str(DEFAULT_DATA_DIR))
         self.data_dir = Path(data_dir if data_dir is not None else configured).expanduser()
@@ -34,6 +36,7 @@ class AppContext:
         self._actor = actor
         self.rbac_enabled = rbac_enabled
         self.queue_on_approval_refusal = queue_on_approval_refusal
+        self.privileged_runner = privileged_runner
 
     # -- index ---------------------------------------------------------------
 
@@ -149,6 +152,7 @@ class AppContext:
             approve=self._interactive_approve,
             queue_on_approval_refusal=self.queue_on_approval_refusal,
             role_engine=role_engine,
+            runner=self._privileged_runner if self.privileged_runner else None,
         )
 
     @property
@@ -157,6 +161,43 @@ class AppContext:
         import os
 
         return self._actor or os.environ.get("RP_ACTOR", "operator")
+
+    # -- privileged runner (wireless plane) -------------------------------------------------
+    # RF tools (airmon-ng, airodump-ng) need root on a Kali box. This runner
+    # wraps ONLY the wireless whitelisted binaries via sudo -n; it is never a
+    # free-form shell path — the adapter's build_argv contract decides every
+    # token, and non-root execution keeps working identically.
+
+    _SUDO_BINARIES = frozenset({"airmon-ng", "airodump-ng"})
+
+    def _privileged_runner(self, argv):
+        import subprocess
+
+        if not argv or argv[0] not in self._SUDO_BINARIES:
+            return ExecutionBroker._default_runner(argv)
+        if os.geteuid() == 0:
+            return ExecutionBroker._default_runner(argv)
+        env = dict(os.environ)
+        askpass = env.get("RP_SUDO_ASKPASS", "")
+        cmd = ["sudo", "-A", *argv] if askpass else ["sudo", "-n", *argv]
+        if askpass:
+            env["SUDO_ASKPASS"] = askpass
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True,
+                timeout=3600, check=False, env=env,
+            )
+            if proc.returncode != 0 and "a password is required" in (proc.stderr + proc.stdout):
+                hint = ("no passwordless sudo for this user — either run once with "
+                        "RP_SUDO_ASKPASS=/path/to/askpass --privileged, grant "
+                        "NOPASSWD for airmon-ng/airodump-ng in sudoers, or run the "
+                        "command under sudo -i yourself")
+                return proc.returncode, proc.stdout, (proc.stderr + "\n" + hint).strip()
+            return proc.returncode, proc.stdout, proc.stderr
+        except FileNotFoundError:
+            return ExecutionBroker._default_runner(argv)
+        except subprocess.TimeoutExpired:
+            return 124, "", "privileged runner timeout"
 
     # -- interactive gates ---------------------------------------------------------------
 

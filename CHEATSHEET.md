@@ -122,6 +122,24 @@ detection, not disruption. RF surveys require written authorization for
 the PHYSICAL site — the case scope gates hosts; the operator gates the
 spectrum.
 
+### Root on Kali: the `--privileged` flag (sudo, whitelisted binaries only)
+
+`airmon-ng`/`airodump-ng` need root. Non-root boxes add `--privileged` so
+ONLY these two whitelisted binaries are wrapped via `sudo -n` — the argv
+whitelist is unchanged and no other action ever gains sudo:
+
+```bash
+rebel-profiler --privileged run <case-id> wlan-survey office-floor-2 \
+    -p interface wlan0mon -p duration 60
+
+# No passwordless sudo? Provide an askpass helper once:
+RP_SUDO_ASKPASS=/path/to/askpass.sh rebel-profiler --privileged run \
+    <case-id> wlan-monitor operator-laptop -p interface wlan0
+```
+
+Or run the whole command under `sudo -i` yourself — then no flag is needed.
+A sudo password failure returns the exact sudoers/askpass hint in stderr.
+
 ## 1. Case lifecycle (every job starts here)
 
 ```bash
