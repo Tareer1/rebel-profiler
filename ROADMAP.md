@@ -348,9 +348,11 @@ weakening a single gate. Every item keeps the Phase 1 invariants.
   only same-user rebel-profiler serve/bridge processes found via a pure
   /proc scan — never arbitrary pids; evidence and audit chains stay on
   disk, only the listeners stop)
-- [ ] **Windows/WSL support matrix**: doctor + adapters verified under WSL2
-  with the same Kali toolset, gaps documented honestly (some hunter
-  binaries have no Windows build)
+- [x] **Windows/WSL support matrix**: doctor detects WSL read-only via
+  /proc (informational row, never gating) and docs/WSL.md records the
+  verified matrix — full core/RE/web/LLM support under WSL2, honest
+  partials (tcpdump aggregates, raw-socket craft), and the RF plane
+  stated as bare-metal-only rather than faked
 - [ ] **Localization**: CLI messages and docs in Urdu + English throughout,
   starting with the human-mode strings (structure, exit codes and JSON
   contracts stay language-neutral)

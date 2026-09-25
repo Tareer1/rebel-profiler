@@ -118,6 +118,7 @@ footer{margin-top:26px;color:var(--text-dim);font-size:11px;font-family:var(--fo
     <button data-s="hermes" title="Hermes chat">❯</button>
     <button data-s="dorks" title="Dorking">⌕</button>
     <button data-s="surface" title="Surface">⬡</button>
+    <button data-s="bins" title="Binary analysis">⛁</button>
     <button data-s="approvals" title="Approval queue">✋</button>
     <button data-s="bridge" title="Browser bridge">⇄</button>
     <div class="spacer"></div>
@@ -217,6 +218,28 @@ footer{margin-top:26px;color:var(--text-dim);font-size:11px;font-family:var(--fo
           <div style="max-width:120px"><label>&nbsp;</label><button class="btn primary" id="dk-go">run</button></div>
         </div>
         <div id="dk-out" style="margin-top:12px"></div>
+      </div>
+    </section>
+
+    <!-- BINARY ANALYSIS (RE plane) -->
+    <section class="screen" id="s-bins">
+      <div class="panel"><h2>Static binary triage (offline — the sample never executes)</h2>
+        <div class="row">
+          <div><label>Case</label><select id="bn-case"></select></div>
+          <div><label>Sample path</label><input id="bn-target" placeholder="/srv/samples/app.bin"></div>
+        </div>
+        <div class="row">
+          <div><label>Action</label>
+            <select id="bn-action">
+              <option value="binary_info|">binary-info · format, arch, libs</option>
+              <option value="checksec|">checksec · NX/PIE/canary/RELRO</option>
+              <option value="string_dump|400">string-dump · IOC candidates</option>
+              <option value="symbol_dump|">symbol-dump · imports</option>
+              <option value="disasm|.text">disasm · section</option>
+            </select></div>
+          <div style="max-width:120px"><label>&nbsp;</label><button class="btn primary" id="bn-go">run</button></div>
+        </div>
+        <div id="bn-out" style="margin-top:12px"></div>
       </div>
     </section>
 
@@ -382,7 +405,7 @@ async function loadCases(){
   tbody.querySelectorAll("button[data-act]").forEach(b=>b.onclick=async()=>{
     await cli("case_activate",{case:b.dataset.act}); loadCases(); refreshState();});  // fill dork/bridge/approval case selects
   const selHtml=cases.map(c=>`<option>${esc(c.id)}</option>`).join("");
-  for(const id of ["dk-case","bg-case","ap-case"]) $("#"+id).innerHTML=selHtml||"";
+  for(const id of ["dk-case","bg-case","ap-case","bn-case"]) $("#"+id).innerHTML=selHtml||"";
 }
 $("#nc-go").onclick=async()=>{
   const name=$("#nc-name").value.trim(), desc=$("#nc-desc").value.trim(),
@@ -441,6 +464,23 @@ $("#hermes-goal").addEventListener("keydown",e=>{if(e.key==="Enter")askHermes();
 $("#term-toggle").onclick=()=>$("#terminal").classList.toggle("hidden");
 
 /* ---------- dorks ---------- */
+/* ---------- binary analysis (RE plane) ---------- */
+const bnGo=$("#bn-go");
+if(bnGo){bnGo.onclick=async()=>{
+  const c=$("#bn-case").value, t=$("#bn-target").value.trim(),
+        [cmd,extra]=$("#bn-action").value.split("|");
+  if(!c||!t){$("#bn-out").innerHTML='<div class="empty">pick a case + sample path</div>';return;}
+  $("#bn-out").innerHTML='<div class="working">reading…</div>';
+  const params={case:c,target:t};
+  if(extra){params.text=extra;}
+  const r=await cli(cmd,params);
+  const data=r&&r.result?r.result:r;
+  const claims=(data&&data.claims)||[];
+  $("#bn-out").innerHTML=(claims.length?
+    '<table><tbody>'+claims.map(x=>'<tr><td class="mono">'+esc(x.kind)+'</td><td class="mono">'+esc(String(x.value).slice(0,110))+'</td></tr>').join('')+'</tbody></table>'
+    :'<div class="empty">no claims (nothing artifact-shaped, or the run failed — check the proxy log)</div>');
+};}
+
 $("#dk-go").onclick=async()=>{
   const c=$("#dk-case").value, t=$("#dk-target").value.trim(),
         [cmd,engine]=$("#dk-engine").value.split("|"), dork=$("#dk-dork").value;

@@ -3118,6 +3118,17 @@ def cmd_doctor(ctx: AppContext, args: argparse.Namespace) -> int:
                              "checkpoint(s) on disk"})
     for section, key in PROTECTED_SECURITY_KEYS:
         checks.append({"check": f"protected: {section}.{key}", "ok": "yes", "detail": "enforced"})
+    # Windows/WSL detection (Phase 12 support matrix): informational, never
+    # gating — RF tools and 802.11 adapters need real hardware and stay
+    # Kali-native; everything else degrades exactly like a missing binary.
+    wsl = _wsl_environment()
+    if wsl is not None:
+        checks.append({
+            "check": "WSL environment",
+            "ok": "yes",
+            "detail": wsl + " — RF/wireless adapters unavailable; "
+                      "see docs/WSL.md for the verified support matrix",
+        })
     ok = all(c["ok"] == "yes" for c in checks)
     verdict = (f"doctor: ALL CHECKS PASSED {theme.GREEN}{theme.GLYPHS['ok']}{theme.RESET}"
                if ok else
@@ -3126,6 +3137,32 @@ def cmd_doctor(ctx: AppContext, args: argparse.Namespace) -> int:
     emit({"human": f"{theme.CYAN}{theme.GLYPHS['shield']} {verdict}{theme.RESET}",
           "data": checks}, args.output)
     return EXIT_SUCCESS if ok else 1
+
+
+def _wsl_environment() -> str | None:
+    """Return a short WSL description when running under WSL, else None.
+
+    Detection is read-only: /proc/version carries 'microsoft'/'WSL' on
+    every WSL2 kernel, and WSL1 through /proc/sys/kernel/osrelease. Never
+    gates anything — the doctor row is purely informational.
+    """
+    import re as _re
+
+    try:
+        version = Path("/proc/version").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    if _re.search(r"microsoft|wsl", version, _re.IGNORECASE):
+        m = _re.search(r"WSL(\d)", version, _re.IGNORECASE)
+        return f"WSL{m.group(1)}" if m else "WSL"
+    try:
+        release = Path("/proc/sys/kernel/osrelease").read_text(
+            encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    if _re.search(r"microsoft|wsl", release, _re.IGNORECASE):
+        return "WSL"
+    return None
 
 
 def _llm_tiers():
