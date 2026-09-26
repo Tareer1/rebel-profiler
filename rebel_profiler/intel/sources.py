@@ -16,7 +16,7 @@ pure function: same inputs, same score, versioned and auditable.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 RELIABILITY_GRADES: dict[str, int] = {
     # A: primary/authoritative (registry of record, protocol answer from the

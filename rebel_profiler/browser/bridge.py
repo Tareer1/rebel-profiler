@@ -32,14 +32,11 @@ from __future__ import annotations
 
 import json
 import re
-import threading
 import time
-import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from ..core.errors import RPError, ScopeViolationError, UsageError
-from ..core.redact import redact
+from ..core.errors import ScopeViolationError, UsageError
 from ..evidence.audit import AuditChain
 from ..evidence.store import EvidenceStore
 from ..intel.claims import ClaimLedger
@@ -47,7 +44,7 @@ from ..intel.collection import CollectionPipeline
 from ..intel.injection import scan_injection, sanitize_external
 from ..intel.sources import SourceRegistry
 from ..security.scope import ScopeEngine
-from ..execution.worker import JobPlane, _sha256_canonical
+from ..execution.worker import JobPlane
 
 BRIDGE_TOKEN_ENV = "RP_BROWSER_TOKEN"
 DEFAULT_PORT = 8765

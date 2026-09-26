@@ -16,7 +16,6 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Iterator
 
 from ..core.errors import StateError, UsageError
 

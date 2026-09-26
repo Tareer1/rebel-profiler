@@ -701,7 +701,6 @@ def _parse_cors_headers(stdout: str) -> list[tuple[str, str]]:
     unrun one, and the deterministic-parser discipline forbids that.
     """
     # curl -sS appends error lines to stderr; stdout of -i is headers+body
-    lower = stdout.lower()
     acao = ""
     acac = ""
     for line in stdout.splitlines():

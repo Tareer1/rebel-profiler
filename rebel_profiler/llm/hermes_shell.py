@@ -73,6 +73,7 @@ def build_banner(*, model: str, case: dict, tools: int,
                  width: int | None = None) -> str:
     """The welcome banner: hero on the left, session facts on the right."""
     cols = width or shutil.get_terminal_size().columns
+    hero_w = min(40, max(20, cols))   # narrow terminals keep a usable gap
     lines: list[str] = []
     hero = [line for line in HERMES_CADUCEUS.splitlines()]
     scope_n = case.get("scope_entries", "?")
@@ -89,9 +90,7 @@ def build_banner(*, model: str, case: dict, tools: int,
         "",
         f"{_dim('/help for commands  ·  plain language works too')}",
     ]
-    term = max(80, min(cols, 100))
     n = max(len(hero), len(info))
-    hero_w = 40
     for i in range(n):
         left = hero[i] if i < len(hero) else ""
         right = info[i] if i < len(info) else ""
@@ -338,7 +337,7 @@ def registry_help(filt: str = "") -> str:
 
 def run_repl(ctx, case_rec: dict, args, plane) -> int:
     """The Hermes-agent-style shell: banner → prompt → slash dispatch → agent loops."""
-    from .hermes import HermesAgentLoop, tool_schema
+    from .hermes import tool_schema
     from .inference import TinyLlmEngine
 
     db = ctx.open_case(case_rec["id"])

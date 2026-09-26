@@ -470,7 +470,7 @@ class ExecutionBroker:
         except UsageError:
             argv = []
         queue = ApprovalQueue(self._db, self._audit)
-        record = queue.enqueue(
+        queue.enqueue(
             request.case_id, task_id=task_id, action=request.action,
             target=request.target, argv=argv, params=dict(request.params),
             risk=gate.decision.risk.level,
@@ -498,7 +498,7 @@ class ExecutionBroker:
             raise PermissionDeniedError(
                 f"Approval '{approval_id}' is '{record['state']}', not approved",
                 action="Decide the approval first: rebel-profiler approval decide.")
-        argv = queue.load_argv(approval_id)
+        queue.load_argv(approval_id)   # tamper check only: argv is rebuilt below
         params = queue.load_params(approval_id)
         adapter = self._adapters.get(record["action"])
         if adapter is None:

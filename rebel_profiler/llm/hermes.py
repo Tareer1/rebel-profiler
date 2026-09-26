@@ -36,13 +36,11 @@ import os
 import re
 import time
 
-from ..agent import Proposal
 from ..core.errors import DependencyUnavailableError, RPError, UsageError
 from ..core.redact import redact
 from .inference import ModelPlane, TinyLlmEngine
 from .operator_tools import OPERATOR_TOOLS, execute as _execute_operator_tool
 from .operator_tools import operator_schemas
-from .planner import _plane_from_env
 
 # Bounded prompt/output — the same budget discipline the planner applies.
 GOAL_MAX_CHARS = 600
@@ -539,8 +537,6 @@ class HermesAgentLoop:
         the active case, its scope and claim count — "keep working the
         active case" becomes actionable without re-stating anything.
         """
-        from .inference import TinyLlmEngine as _Tiny  # cheap guard import
-
         engine_selected = False
         messages: list[dict] = [
             {"role": "system", "content": self._tools_prompt()},

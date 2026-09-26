@@ -15,6 +15,10 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:   # annotations only — keeps the CLI import graph light
+    from ..llm.inference import ModelPlane
 
 from ..core.config import get as _cfg_get
 from ..core.errors import EXIT_SUCCESS, EXIT_USAGE, RPError, UsageError
@@ -896,7 +900,7 @@ def _cmd_intel_playbook(ctx: AppContext, args: argparse.Namespace) -> int:
     # reported and the run continues to the next — the recipe is the plan,
     # the gates stay the law.
     pb = get_playbook(args.playbook_name, ctx.data_dir)
-    rec = ctx.find_case(args.case_id)
+    ctx.find_case(args.case_id)   # unknown case = structured error before any expansion
     overrides = {k: v for k, v in (args.param or [])}
     expansion = expand_playbook(pb, args.target)
     if overrides:
@@ -978,7 +982,7 @@ def _cmd_intel_payload(ctx: AppContext, args: argparse.Namespace) -> int:
             return 4
         built["payload"] = args.custom_payload or built["payload"]
         deployment = deploy_payload(rec["id"], built, approved=True)
-        from ..execution import ActionRequest, ExecutionBroker
+        from ..execution import ActionRequest
 
         db = ctx.open_case(rec["id"])
         try:
@@ -1007,7 +1011,7 @@ def _cmd_intel_payload(ctx: AppContext, args: argparse.Namespace) -> int:
                        f"\n  task: {result.task_id}  evidence: {result.evidence_id}",
               "data": data}, args.output)
         return EXIT_SUCCESS if result.outcome == "succeeded" else 1
-    raise UsageError(f"Unknown payload subcommand")
+    raise UsageError("Unknown payload subcommand")
 
 
 def _plan_first_target(case_id: str, ctx) -> str:
@@ -1431,7 +1435,6 @@ def cmd_approval(ctx: AppContext, args: argparse.Namespace) -> int:
         if args.approval_command == "run":
             if ctx.rbac_enabled:
                 RoleEngine(db).require(rec["id"], ctx.actor, "approve")
-            from ..execution.broker import ExecutionBroker
 
             broker = ctx.broker(db)
             result = broker.execute_approved(args.approval_id, decided_by=ctx.actor)
@@ -1445,8 +1448,6 @@ def cmd_approval(ctx: AppContext, args: argparse.Namespace) -> int:
 
 def cmd_hypothesis(ctx: AppContext, args: argparse.Namespace) -> int:
     import json as _json
-
-    from ..evidence.audit import AuditChain as _A
 
     from ..intel import ClaimLedger, SourceRegistry
     from ..intel.hypotheses import HypothesisEngine, HypothesisError, render_human
@@ -1942,7 +1943,6 @@ def cmd_agent_chat(ctx: AppContext, args: argparse.Namespace) -> int:
     if not str(getattr(args, "goal", "") or "").strip():
         return _cmd_agent_chat_repl(ctx, args)
     from ..llm.inference import ModelPlane
-    from ..llm.planner import _plane_from_env
     from ..llm.budget import resolve_limits
     from ..llm.hermes import HermesAgentLoop, render_human
 
@@ -1982,7 +1982,7 @@ def _llm_tier_arg(args) -> str | None:
     return getattr(args, "tier", None)
 
 
-def _hermes_repl_plane(args) -> "ModelPlane":
+def _hermes_repl_plane(args) -> "ModelPlane":  # noqa: F821 — forward ref, resolved lazily
     """Resolve the ModelPlane for the interactive Hermes REPL."""
     from ..llm.budget import resolve_limits
     from ..llm.inference import ModelPlane
@@ -2059,7 +2059,6 @@ def cmd_hermes(ctx: AppContext, args: argparse.Namespace, plane=None) -> int:
     from ..llm.budget import resolve_limits
     from ..llm.hermes import HermesAgentLoop, render_human
     from ..llm.inference import ModelPlane
-    from ..llm.planner import _plane_from_env
 
     db = ctx.open_case(case_rec["id"])
     prefer = os.environ.get("RP_LLM__ENGINE", "").strip().lower()
@@ -3226,6 +3225,20 @@ def cmd_doctor(ctx: AppContext, args: argparse.Namespace) -> int:
             "detail": wsl + " — RF/wireless adapters unavailable; "
                       "see docs/WSL.md for the verified support matrix",
         })
+    # Static self-scan: the tool audits its own source like a target —
+    # compile-everything plus the project's banned-primitive patterns
+    # (bare except, MD5/SHA-1, pickle.loads). Deterministic, stdlib-only.
+    from ..core.selfscan import self_scan
+
+    scan = self_scan()
+    scan_detail = (f"{scan['files']} module(s) compiled, 0 banned primitives"
+                   if scan["ok"] else
+                   f"{len(scan['findings'])} banned-primitive finding(s), "
+                   f"{len(scan['syntax_errors'])} syntax error(s) — "
+                   + "; ".join(f"{f['file']}:{f['line']} {f['rule']}"
+                               for f in (scan['findings'] + scan['syntax_errors'])[:3]))
+    checks.append({"check": "static self-scan", "ok": "yes" if scan["ok"] else "no",
+                   "detail": scan_detail})
     ok = all(c["ok"] == "yes" for c in checks)
     verdict = (_t("doctor.all_ok", glyph=f"{theme.GREEN}{theme.GLYPHS['ok']}{theme.RESET}")
                if ok else
@@ -3295,7 +3308,6 @@ def _local_model_counts() -> dict:
 
 def _best_local_model(limits) -> tuple[str, str]:
     """Pick the best-fitting LOCAL checkpoint for --local (no download, ever)."""
-    from ..llm.budget import BUDGET_TIERS
     from ..llm.setup import local_models
 
     payload = local_models(limits=limits)
@@ -3534,20 +3546,20 @@ def build_parser() -> argparse.ArgumentParser:
     pcwe_s = pcwe_subs.add_parser("search", parents=[sub_common],
                                   help="search the catalog by keyword")
     pcwe_s.add_argument("terms", nargs="+")
-    pcwe_r = pcwe_subs.add_parser("refresh", parents=[sub_common],
-                                  help="fetch the official MITRE CWE catalog once and cache it offline")
+    pcwe_subs.add_parser("refresh", parents=[sub_common],
+                         help="fetch the official MITRE CWE catalog once and cache it offline")
     pcwe_b = pcwe_subs.add_parser("blind-spots", parents=[sub_common],
                                   help="likelihood-ranked weaknesses this case has NOT probed")
     pcwe_b.add_argument("case_id")
-    pcwe_st = pcwe_subs.add_parser("status", parents=[sub_common],
-                                   help="catalog cache status")
+    pcwe_subs.add_parser("status", parents=[sub_common],
+                         help="catalog cache status")
     p_ian = intel_subs.add_parser("anomalies", parents=[sub_common],
                                   help="unknown-vulnerability candidates: drift, outliers and first-seen surface over this case's claims")
     p_ian.add_argument("case_id")
     p_ipb = intel_subs.add_parser("playbook", parents=[sub_common],
                                   help="hunt playbooks: reviewed multi-step recipes expanded into gated plans")
     ipb_subs = p_ipb.add_subparsers(dest="playbook_command", required=True)
-    p_ipbl = ipb_subs.add_parser("list", parents=[sub_common], help="list builtin + operator playbooks")
+    ipb_subs.add_parser("list", parents=[sub_common], help="list builtin + operator playbooks")
     p_ipbs = ipb_subs.add_parser("show", parents=[sub_common], help="show one playbook's steps")
     p_ipbs.add_argument("playbook_name")
     p_ipbr = ipb_subs.add_parser("run", parents=[sub_common],
@@ -3566,7 +3578,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ipb = ipay_subs.add_parser("build", parents=[sub_common],
                                  help="build one benign impact-marker payload for an in-scope target")
     p_ipb.add_argument("case_id")
-    p_ipb.add_argument("payload_class", help=f"one of: reflected_xss, sqli_error, sqli_timing, ssti, cmdi_echo, open_redirect, idor_pivot, traversal")
+    p_ipb.add_argument("payload_class", help="one of: reflected_xss, sqli_error, sqli_timing, ssti, cmdi_echo, open_redirect, idor_pivot, traversal")
     p_ipb.add_argument("--target", default="", help="in-scope URL (default: first live-URL claim in the case)")
     p_ipb.add_argument("--param", default="", help="parameter to inject into (default q)")
     p_ipd = ipay_subs.add_parser("deploy", parents=[sub_common],
@@ -3666,7 +3678,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_scadd.add_argument("--not-after", type=float, default=None, help="epoch seconds; window closes")
     p_scadd.add_argument("--cron", default="", help="only 'interval=<minutes>' is offered")
     p_scadd.add_argument("--workflow-spec", default="", help="workflow DSL text to run in-window")
-    p_sctick = sched_subs.add_parser("tick", parents=[sub_common], help="run one scheduler pass")
+    sched_subs.add_parser("tick", parents=[sub_common], help="run one scheduler pass")
     p_sclist = sched_subs.add_parser("list", parents=[sub_common], help="list schedules")
     p_sclist.add_argument("case_id")
     p_sclist.add_argument("--state", default=None, choices=["active", "paused", "expired", "cancelled", "all"])
@@ -3855,7 +3867,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_fprop.add_argument("--author", default="")
     p_fprop.add_argument("--test-cases", default="", help="JSON list of {target, params} sandbox cases")
     forge_subs.add_parser("list", parents=[sub_common], help="list forged modules")
-    p_freg = forge_subs.add_parser("register", parents=[sub_common], help="register forged adapters into the live registry")
+    forge_subs.add_parser("register", parents=[sub_common], help="register forged adapters into the live registry")
 
     # system — privileged jobs
     p_sys = subs.add_parser("system", parents=[sub_common], help="privileged system jobs (whitelisted, approval-gated sudo)")
@@ -3880,7 +3892,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_detg.add_argument("--text", default="", help="free text to extract IoCs from")
     p_detg.add_argument("--ioc", action="append", help="explicit IoC as kind=value (repeatable)")
     p_detg.add_argument("--note", default="")
-    p_detk = det_subs.add_parser("kinds", parents=[sub_common], help="list artifact kinds (no case needed)")
+    det_subs.add_parser("kinds", parents=[sub_common], help="list artifact kinds (no case needed)")
     p_detl = det_subs.add_parser("list", parents=[sub_common], help="list generated artifacts")
     p_detl.add_argument("case_id")
 

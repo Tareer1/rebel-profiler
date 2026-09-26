@@ -34,7 +34,6 @@ from .tools import (
 )
 from .techniques import (
     TECHNIQUES,
-    Technique,
     all_techniques,
     find_technique,
     techniques_context,

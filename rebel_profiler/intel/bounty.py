@@ -715,8 +715,8 @@ def _from_recon_claim(claim) -> tuple[BountyFinding, bool]:
     """
     kind = claim.kind.split(":", 1)[1]
     value = (claim.value or "")[:200]
-    # Public-by-design client identifiers are not even candidates.
-    public_kinds = {"generic_api_key"}
+    # Public-by-design client identifiers (e.g. a short alphanumeric
+    # generic_api_key that is a public analytics id) are not even candidates.
     is_public_client = kind == "generic_api_key" and len(value) <= 40 \
         and value.isalnum()
     return (BountyFinding(

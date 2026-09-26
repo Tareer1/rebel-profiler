@@ -31,7 +31,6 @@ from ..core.errors import DependencyUnavailableError, UsageError
 from ..core.redact import redact
 from .codescript import (
     REJECT_SUFFIX,
-    RESULT_SUFFIX,
     SCRIPT_SUFFIX,
     load_script_result,
     submit_script,

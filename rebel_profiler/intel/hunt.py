@@ -24,7 +24,7 @@ from __future__ import annotations
 import html.parser
 import time
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
 
 from ..core.errors import ScopeViolationError, UsageError
@@ -247,7 +247,6 @@ class JsHunter:
         host = (urlparse(page_url).hostname or "").lower()
         if not host:
             return []
-        import json as _json
         try:
             request = urllib.request.Request(
                 "https://web.archive.org/cdx/search/cdx"
@@ -259,12 +258,10 @@ class JsHunter:
         except Exception:
             return []   # archive down/rate-limited: history is optional
         items: list[HuntItem] = []
-        base = (urlparse(page_url).scheme or "https") + "://" + host
         for line in lines.splitlines():
             url = line.strip()
             if not url.startswith("http"):
                 continue
-            path = url.split(host, 1)[-1] if host in url else ""
             items.append(HuntItem(
                 priority=3, category="historical", kind="wayback_url",
                 value=url[:300], origin=f"wayback:{host}",

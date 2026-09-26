@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 from ..core.config import get, load_config
-from ..core.errors import ConfigError, StateError, UsageError
+from ..core.errors import StateError, UsageError
 from ..evidence.audit import AuditChain
 from ..evidence.store import EvidenceStore
 from ..execution.broker import ExecutionBroker

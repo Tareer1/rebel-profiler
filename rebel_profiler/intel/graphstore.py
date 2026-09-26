@@ -22,12 +22,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .claims import ClaimLedger
-from .fusion import MULTI_VALUED_KINDS
 from .surface import (
     NODE_IP,
     NODE_PORT,
-    NODE_PRODUCT,
-    NODE_SERVICE,
     NODE_VERSION,
     OPEN_PORT,
     RESOLVES_TO,

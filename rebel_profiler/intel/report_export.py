@@ -147,7 +147,7 @@ def to_markdown(report: dict) -> str:
                 f"({f.get('cwe', 'CWE-?')}) · confidence {f.get('confidence', '?')}",
                 f"- **Detail:** {f.get('detail', '')}",
                 f"- **Impact:** {f.get('impact', '')}",
-                f"- **Reproduce:**",
+                "- **Reproduce:**",
                 "  ```bash",
                 f"  {f.get('reproduce', '# (no repro command recorded)')}",
                 "  ```",

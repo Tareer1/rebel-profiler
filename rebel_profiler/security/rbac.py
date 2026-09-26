@@ -24,9 +24,6 @@ decisions are as deterministic as the policy engine itself.
 
 from __future__ import annotations
 
-import time
-import uuid
-
 from ..core.errors import PermissionDeniedError, UsageError
 from ..storage.database import Database
 

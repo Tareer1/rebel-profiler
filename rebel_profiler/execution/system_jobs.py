@@ -22,14 +22,11 @@ and the composed argv is logged before dispatch.
 from __future__ import annotations
 
 import json
-import shlex
-import shutil
 import subprocess
 import time
-import uuid
 from dataclasses import dataclass
 
-from ..core.errors import RPError, UsageError
+from ..core.errors import UsageError
 from ..evidence.audit import AuditChain
 from ..execution.worker import JobPlane
 from ..security.approvals import ApprovalQueue

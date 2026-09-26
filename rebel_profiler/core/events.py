@@ -27,7 +27,6 @@ import uuid
 
 from ..core.errors import UsageError
 from ..core.redact import redact
-from ..evidence.audit import AuditChain
 from ..storage.database import Database
 
 EVENT_SCHEMA_VERSION = 1

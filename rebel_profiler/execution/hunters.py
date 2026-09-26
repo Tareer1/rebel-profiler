@@ -174,7 +174,7 @@ class ArjunAdapter(Adapter):
         ]
 
 
-class NucleiAdapter(Adapter):
+class NucleiScanAdapter(Adapter):
     """Template-based vulnerability scanning (nuclei) against ONE in-scope URL.
 
     Severity is whitelisted (no info noise by default), the template tag set
@@ -504,7 +504,7 @@ HUNTER_ADAPTERS: tuple[type[Adapter], ...] = (
     KatanaAdapter,
     GauAdapter,
     ArjunAdapter,
-    NucleiAdapter,
+    NucleiScanAdapter,
     NiktoAdapter,
     WpscanAdapter,
     SearchsploitAdapter,

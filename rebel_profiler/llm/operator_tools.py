@@ -626,7 +626,7 @@ def _bridge_state() -> dict:
     required=("action", "target"),
 )
 def _collect(ctx, db, case_id, args, scope_engine=None):
-    from ..core.errors import RPError, UsageError
+    from ..core.errors import UsageError
     from ..evidence.store import EvidenceStore
     from ..execution import ActionRequest
     from ..execution.broker import AdapterRegistry
@@ -779,7 +779,7 @@ def _anomalies(ctx, db, case_id, args, scope_engine=None):
     required=("url",),
 )
 def _hunt_run(ctx, db, case_id, args, scope_engine=None):
-    from ..core.errors import RPError, UsageError
+    from ..core.errors import UsageError
     from ..evidence.store import EvidenceStore
     from ..intel.claims import ClaimLedger
     from ..intel.collection import CollectionPipeline
@@ -957,7 +957,7 @@ def _probe_execute(ctx, db, case_id, args, scope_engine=None):
     approval_id = str(args["approval_id"]).strip()
     queue = ApprovalQueue(db)
     try:
-        rec = queue.get(approval_id)
+        queue.get(approval_id)   # unknown id = structured miss below
     except UsageError:
         return {"error": False, "action": "probe_execute",
                 "approval_id": approval_id, "found": False,
@@ -1045,7 +1045,7 @@ def _approval_decide(ctx, db, case_id, args, scope_engine=None):
             action="Ask the operator for an explicit approve or deny.")
     queue = ApprovalQueue(db)
     try:
-        rec = queue.get(approval_id)
+        queue.get(approval_id)   # unknown id = the structured error below
     except UsageError as exc:
         raise UsageError(
             f"no approval '{approval_id}' in this case",

@@ -24,7 +24,7 @@ import time
 import zipfile
 from pathlib import Path
 
-from .errors import RPError, StateError, UsageError
+from .errors import StateError, UsageError
 
 BACKUP_MANIFEST = "manifest.json"
 SCHEMA_META_KEY = "schema_version"

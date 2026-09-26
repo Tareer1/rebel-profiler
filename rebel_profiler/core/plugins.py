@@ -26,12 +26,11 @@ from __future__ import annotations
 import hashlib
 import hmac
 import importlib.util
-import json
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .errors import ConfigError, UsageError
+from .errors import ConfigError
 
 PLUGIN_MANIFEST = "plugin.toml"
 SIGNATURE_FILE = "signature"

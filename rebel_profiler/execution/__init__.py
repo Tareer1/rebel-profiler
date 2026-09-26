@@ -16,14 +16,9 @@ from .re import (
     SymbolDumpAdapter,
 )
 from .hunters import (
-    ArjunAdapter,
-    GauAdapter,
     HUNTER_ADAPTERS,
-    HttpxAdapter,
-    KatanaAdapter,
-    NucleiAdapter,
-    SubfinderAdapter,
     NiktoAdapter,
+    NucleiScanAdapter,
     WpscanAdapter,
     SearchsploitAdapter,
     TcpdumpCaptureAdapter,
@@ -57,6 +52,7 @@ __all__ = [
     "ActionRequest",
     "DISCOVERY_ADAPTERS",
     "HUNTER_ADAPTERS",
+    "NucleiScanAdapter",
     "NiktoAdapter",
     "WpscanAdapter",
     "SearchsploitAdapter",

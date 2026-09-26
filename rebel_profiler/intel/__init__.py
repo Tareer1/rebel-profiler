@@ -22,11 +22,6 @@ from .fusion import FusionConflict, FusionEngine, FusedAttribute, SubjectProfile
 from .graphstore import GraphEdge, GraphNode, RelationshipGraphStore
 from .injection import injection_report, sanitize_external, scan_injection
 from .surface import (
-    NODE_VERSION,
-    OPEN_PORT,
-    RESOLVES_TO,
-    RUNS,
-    VERSIONED_AS,
     ExposureMapper,
     SurfaceEdge,
     SurfaceGraph,
@@ -59,6 +54,8 @@ __all__ = [
     "EntityResolver",
     "Finding",
     "CaseReport",
+    "build_findings",   # re-export: cli/main + operator_tools import from here
+    "generate_report",  # re-export: cli/main + operator_tools import from here
     "ExposureMapper",
     "SurfaceEdge",
     "SurfaceGraph",

@@ -33,12 +33,10 @@ import re
 import subprocess
 import sys
 import textwrap
-import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..core.errors import UsageError
 from ..core.redact import redact
 from ..evidence.audit import AuditChain
 
@@ -374,11 +372,60 @@ class FeatureForge:
         signature = hmac.new(self._secret.encode(),
                              manifest.encode(), hashlib.sha256).hexdigest()
         (self.forge_dir / FORGE_SIGNATURE).write_text(signature + "\n")
+        # Per-module trust sidecars: register_into verifies EACH module
+        # against its own signed manifest at load time, so accumulating
+        # accepts never orphan an earlier module (a shared manifest would).
+        (self.forge_dir / f"{module_name}.toml").write_text(manifest)
+        (self.forge_dir / f"{module_name}.sig").write_text(signature + "\n")
+
+    def _manifest_matches_module(self, module_path: Path, manifest_text: str) -> bool:
+        """True when the manifest's entry + source hash name THIS module file."""
+        entry = ""
+        declared_hash = ""
+        for line in manifest_text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("entry = "):
+                entry = stripped.split("=", 1)[1].strip().strip('"\'')
+            elif stripped.startswith("# source_sha256 = "):
+                declared_hash = stripped.split("=", 1)[1].strip()
+        if entry != module_path.name:
+            return False
+        if not declared_hash:
+            return False
+        actual = hashlib.sha256(module_path.read_bytes()).hexdigest()
+        return hmac.compare_digest(actual, declared_hash)
 
     def register_into(self, registry) -> list[str]:
-        """Import every accepted forge module and register its adapters."""
+        """Import accepted forge modules and register their adapters.
+
+        Trust is re-verified at LOAD time, not just at propose time: the
+        workspace manifest must carry a valid HMAC signature, and each
+        module must be the file the manifest declares (entry name +
+        sha256). A tampered or orphaned module is refused and audit-logged
+        — never silently executed.
+        """
         registered: list[str] = []
         for path in sorted(self.forge_dir.glob("forge_*.py")):
+            side_manifest = self.forge_dir / f"{path.stem}.toml"
+            side_signature = self.forge_dir / f"{path.stem}.sig"
+            if not (side_manifest.exists() and side_signature.exists()):
+                self._audit("forge.load_refused", path.stem,
+                            {"reason": "no signed manifest sidecar — "
+                                       "module was not forge-accepted"})
+                continue
+            manifest_text = side_manifest.read_text()
+            stored = side_signature.read_text().strip()
+            expected = hmac.new(self._secret.encode(),
+                                manifest_text.encode(), hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(stored, expected):
+                self._audit("forge.load_refused", path.stem,
+                            {"reason": "manifest signature invalid (tampered?)"})
+                continue
+            if not self._manifest_matches_module(path, manifest_text):
+                self._audit("forge.load_refused", path.stem,
+                            {"reason": "module bytes differ from the signed "
+                                       "manifest (hash/entry mismatch)"})
+                continue
             namespace: dict = {}
             try:
                 exec(compile(path.read_text(), str(path), "exec"), namespace)
