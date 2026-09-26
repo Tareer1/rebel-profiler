@@ -34,6 +34,7 @@ _DOMAIN = r"[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
 _URL = r"https?://[A-Za-z0-9./_~:?#@!$&()*+,;=%-]+"
 _TIMEOUT = r"\d{1,3}"
 _SEVERITY = r"(info|low|medium|high|critical)(,(info|low|medium|high|critical))*"
+_LIMIT = r"\d{1,5}"   # shared bounded-count token (subfinder/gau/httpx caps)
 
 
 class SubfinderAdapter(Adapter):
@@ -44,8 +45,6 @@ class SubfinderAdapter(Adapter):
     capability_class = "passive_recon"
     allowed_params = ("timeout", "limit")
     required_params = ()
-
-    _LIMIT = r"\d{1,4}"
 
     def build_argv(self, request: ActionRequest) -> list[str]:
         domain = _single_token(request.target, field="domain",
@@ -145,15 +144,13 @@ class GauAdapter(Adapter):
     allowed_params = ("limit",)
     required_params = ()
 
-    _LIMIT = r"\d{1,5}"
-
     def build_argv(self, request: ActionRequest) -> list[str]:
         domain = _single_token(request.target, field="domain", pattern=_DOMAIN)
         argv = [self.binary, "--subs", "--threads", "2", domain]
         limit = request.params.get("limit")
         if limit is not None:
             argv += ["--oos", _single_token(limit, field="limit",
-                                            pattern=self._LIMIT)]
+                                            pattern=_LIMIT)]
         return argv
 
 

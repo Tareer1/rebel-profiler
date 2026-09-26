@@ -90,6 +90,8 @@ def _case_context(case_id: str, db) -> str:
     """
     lines = [f"CONTEXT: current case id = {case_id}"]
     try:
+        row = db.get_case(case_id)
+        if row is not None:
             lines.append(
                 "Hunting workflow: hunt_run (seed URL) → hunt_triage → "
                 "probe_suggest (approval-gated). Prefer passive tools first.")
