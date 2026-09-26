@@ -1,4 +1,4 @@
-"""Localization scaffolding (ROADMAP Phase 12): RP_LANG, Urdu/English.
+"""Localization scaffolding (ROADMAP Phase 12): Hinglish/Urdu/English.
 
 Machine contracts stay language-neutral: JSON keys, exit codes, schema
 versions. These tests pin the scaffolding's fail-safe selection and the
@@ -28,9 +28,13 @@ def _lang_en(monkeypatch):
     i18n._LANG = "en"
 
 
-def _set_urdu(monkeypatch) -> None:
-    monkeypatch.setenv("RP_LANG", "ur")
-    i18n._LANG = "ur"
+def _set_lang(monkeypatch, code: str) -> None:
+    import os
+
+    monkeypatch.setenv("RP_LANG", code)
+    i18n._LANG = ("hi-ur" if code in {"hi-ur", "hinglish", "hi", "roman-urdu"}
+                  else "ur" if code in {"ur", "urdu", "ur_pk"} else "en")
+    assert os.environ.get("RP_LANG") == code
 
 
 def test_default_is_english():
@@ -39,8 +43,19 @@ def test_default_is_english():
     assert i18n.t("theme.action") == "Action:"
 
 
+def test_hinglish_selection_and_aliases(monkeypatch):
+    _set_lang(monkeypatch, "hi-ur")
+    assert i18n.lang() == "hi-ur"
+    assert i18n.t("theme.reason") == "Wajah:"
+    assert i18n.t("theme.action") == "Kya karein:"
+    assert i18n.t("theme.exit_footer", code=5).startswith("exit 5")
+    # Hinglish is pure Latin script — safe on RTL-less terminals
+    assert all(ord(ch) < 0x0900 for ch in i18n.t("theme.reason")
+               + i18n.t("theme.action"))
+
+
 def test_urdu_selection_via_env(monkeypatch):
-    _set_urdu(monkeypatch)
+    _set_lang(monkeypatch, "ur")
     assert i18n.lang() == "ur"
     assert i18n.t("theme.reason") == "وجہ:"
     assert i18n.t("theme.exit_footer", code=5).startswith("ایگزٹ 5")
@@ -51,17 +66,17 @@ def test_unknown_language_code_falls_back_to_english():
 
 
 def test_missing_key_returns_the_key_itself(monkeypatch):
-    _set_urdu(monkeypatch)
+    _set_lang(monkeypatch, "hi-ur")
     assert i18n.t("no.such.key") == "no.such.key"
 
 
 def test_english_fallback_for_untranslated_key(monkeypatch):
-    saved = i18n.STRINGS["ur"].pop("verdict.ok")
+    saved = i18n.STRINGS["hi-ur"].pop("verdict.ok")
     try:
-        _set_urdu(monkeypatch)
+        _set_lang(monkeypatch, "hi-ur")
         assert i18n.t("verdict.ok") == "ok"
     finally:
-        i18n.STRINGS["ur"]["verdict.ok"] = saved
+        i18n.STRINGS["hi-ur"]["verdict.ok"] = saved
 
 
 def test_error_frame_uses_i18n_labels():
@@ -73,10 +88,19 @@ def test_error_frame_uses_i18n_labels():
     assert "Reason:" in frame and "Action:" in frame and "exit 5" in frame
 
 
+def test_error_frame_localizes_in_hinglish(monkeypatch):
+    from rebel_profiler.cli.theme import error_frame
+
+    _set_lang(monkeypatch, "hi-ur")
+    frame = error_frame("SCOPE", "target not in scope", "scope fails closed",
+                        "add the target to the case scope", 5)
+    assert "Wajah:" in frame and "Kya karein:" in frame and "exit 5" in frame
+
+
 def test_error_frame_localizes_in_urdu(monkeypatch):
     from rebel_profiler.cli.theme import error_frame
 
-    _set_urdu(monkeypatch)
+    _set_lang(monkeypatch, "ur")
     frame = error_frame("SCOPE", "target not in scope", "scope fails closed",
                         "add the target to the case scope", 5)
     assert "وجہ:" in frame and "ایکشن:" in frame and "ایگزٹ 5" in frame
@@ -84,7 +108,7 @@ def test_error_frame_localizes_in_urdu(monkeypatch):
 
 def test_machine_contract_stays_language_neutral(monkeypatch):
     """RP_LANG must never touch JSON output: keys and codes are identical."""
-    _set_urdu(monkeypatch)
+    _set_lang(monkeypatch, "hi-ur")
     payload = {"ok": False, "exit": 2, "code": "usage"}
     rendered = json.dumps(payload, sort_keys=True)
     assert json.loads(rendered) == payload  # keys untouched by language

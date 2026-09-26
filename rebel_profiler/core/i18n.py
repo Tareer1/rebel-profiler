@@ -1,4 +1,4 @@
-"""Localization (ROADMAP Phase 12): Urdu + English operator messages.
+"""Localization (ROADMAP Phase 12): Hinglish + Urdu + English operator strings.
 
 The law this module obeys: the machine contracts stay language-neutral.
 JSON / JSONL / CSV output, exit codes, schema versions and keys are byte-
@@ -6,13 +6,16 @@ identical in every language — only the HUMAN-mode strings localize.
 
 Selection is environment-driven and fail-safe:
 
-    RP_LANG=ur      → Urdu operator strings
+    RP_LANG=hi-ur   → Hinglish (Roman-Urdu/Hindi: Latin script, Devanagari-free)
+    RP_LANG=ur      → Urdu (Perso-Arabic script)
     anything else   → English (the default, and the fallback for a
                       key a language has not translated yet)
 
 RTL note: Urdu strings render right-to-left inside the terminal per the
 Unicode bidi algorithm — frames and tables stay LTR structural glyphs, so
-no manual reversal happens here and none should ever be added.
+no manual reversal happens here and none should ever be added. Hinglish is
+plain Latin script, so it is the safe choice for terminals with no RTL
+shaping (and what most operators actually type).
 
 Default (English) output stays byte-identical to pre-localization releases:
 every original fragment remains findable in the ``en`` table below.
@@ -22,13 +25,20 @@ from __future__ import annotations
 
 import os
 
+_HINGLISH_CODES = {"hi-ur", "hinglish", "hi", "roman-urdu"}
 _URDU_CODES = {"ur", "urdu", "ur_pk"}
 
-_LANG = "ur" if os.environ.get("RP_LANG", "").strip().lower() in _URDU_CODES else "en"
+_RAW_LANG = os.environ.get("RP_LANG", "").strip().lower()
+if _RAW_LANG in _HINGLISH_CODES:
+    _LANG = "hi-ur"
+elif _RAW_LANG in _URDU_CODES:
+    _LANG = "ur"
+else:
+    _LANG = "en"
 
 
 def lang() -> str:
-    """The active operator language (``en`` or ``ur``)."""
+    """The active operator language (``en``, ``hi-ur`` or ``ur``)."""
     return _LANG
 
 
@@ -42,6 +52,16 @@ STRINGS: dict[str, dict[str, str]] = {
         "verdict.ok": "ok",
         "verdict.warn": "warn",
         "verdict.denied": "denied",
+    },
+    # Hinglish — Roman script, the operator's spoken register. Same law:
+    # fragments stay short, structural glyphs are never localized.
+    "hi-ur": {
+        "theme.reason": "Wajah:",
+        "theme.action": "Kya karein:",
+        "theme.exit_footer": "exit {code} ∴ har denial audit me darj hai",
+        "verdict.ok": "theek",
+        "verdict.warn": "khatra",
+        "verdict.denied": "reject",
     },
     "ur": {
         "theme.reason": "وجہ:",

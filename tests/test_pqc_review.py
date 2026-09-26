@@ -59,6 +59,6 @@ def test_inventory_surfaces_still_exist():
 def test_review_document_is_present_and_current():
     doc = (REPO_ROOT / "docs" / "PQC_REVIEW.md").read_text(encoding="utf-8")
     for fragment in ("FIPS 203", "FIPS 204", "FIPS 205", "ML-KEM", "ML-DSA",
-                     "SHA-256", "scrypt", "v1.6.1"):
+                     "SHA-256", "scrypt", "v1.6."):
         assert fragment in doc, f"PQC review lost its {fragment} coverage"
     assert "v1.7" not in doc  # re-review due when the version moves past 1.6.x

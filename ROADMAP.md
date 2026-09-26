@@ -373,12 +373,15 @@ weakening a single gate. Every item keeps the Phase 1 invariants.
   verified matrix — full core/RE/web/LLM support under WSL2, honest
   partials (tcpdump aggregates, raw-socket craft), and the RF plane
   stated as bare-metal-only rather than faked
-- [x] **Localization (scaffolding shipped)**: `core/i18n.py` — `RP_LANG=ur`
-  selects Urdu operator strings; English default stays byte-identical to
-  earlier releases; a key missing in one language falls back to English and
-  a key no language declares returns itself (never an empty string). The
-  structured error frame (Reason/Action/exit footer) and
-  `RPError.render()` localize first; JSON/JSONL/CSV contracts, exit codes
-  and schema versions stay language-neutral — pinned by tests/test_i18n.py.
-  String coverage grows release by release; the scaffolding, the selection
-  law and the fallback are what ship now
+- [x] **Localization (scaffolding shipped)**: `core/i18n.py` — `RP_LANG`
+  selects operator strings: `hi-ur` Hinglish (Roman script — the operator's
+  spoken register, safe on RTL-less terminals), `ur` Urdu (Perso-Arabic,
+  rendered by the terminal's own bidi), anything else English. English
+  default stays byte-identical to earlier releases; a key missing in one
+  language falls back to English and a key no language declares returns
+  itself (never an empty string). The structured error frame
+  (Reason/Action/exit footer) and `RPError.render()` localize first;
+  JSON/JSONL/CSV contracts, exit codes and schema versions stay
+  language-neutral — pinned by tests/test_i18n.py. String coverage grows
+  release by release; the scaffolding, the selection law and the fallback
+  are what ship now

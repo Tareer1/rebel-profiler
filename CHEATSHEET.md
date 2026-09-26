@@ -586,6 +586,17 @@ run/work/auto` and the daemon.
 | `RP_LLM__API_BASE` | any OpenAI-compatible /v1 endpoint | api.openai.com |
 | `RP_ACTOR` | acting subject in audit | operator |
 | `RP_API_TOKEN` | token for `serve` gateway | — |
+| `RP_LANG` | operator strings: `hi-ur` (Hinglish) / `ur` (Urdu) / `en` | en |
+
+```bash
+RP_LANG=hi-ur rebel-profiler run <case> no-such-adapter host   # "Wajah: / Kya karein:"
+RP_LANG=ur    rebel-profiler run <case> no-such-adapter host   # error frame in Urdu script
+```
+
+Hinglish (Roman Urdu) is the safe choice on terminals without right-to-left
+shaping; Urdu renders via the terminal's own Unicode bidi — the tool never
+reverses strings. JSON/JSONL/CSV, exit codes and schema keys stay identical
+in every language.
 
 ## 12. Exit codes worth memorizing
 
