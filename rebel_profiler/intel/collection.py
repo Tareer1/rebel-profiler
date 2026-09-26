@@ -1438,6 +1438,10 @@ class CollectionPipeline:
             pairs = _parse_sslscan(stdout)
         elif effective_action == "wlan-survey":
             pairs = _parse_wireless_survey(stdout, stderr)
+        elif effective_action == "docker-audit":
+            pairs = _parse_docker_ps(stdout)
+        elif effective_action == "iac-audit":
+            pairs = _parse_trivy_config_json(stdout)
         else:
             pairs = []
 
@@ -1532,7 +1536,61 @@ class CollectionPipeline:
             "security-txt": "scan.web",
             "graphql-introspection": "scan.web",
             "email-spoof": "dns.authoritative",
+            "docker-audit": "scan.iac",
+            "iac-audit": "scan.iac",
         }.get(action, "unknown")
+
+
+def _parse_docker_ps(stdout: str) -> list[tuple[str, str]]:
+    """`docker ps -a --format` pipe rows → container posture claims.
+
+    Row shape: ID|Image|Names|Status|Ports (the adapter's fixed --format
+    template). A root-privileged container or a published privileged port
+    is a posture observation, not an exploit — the claim records what the
+    runtime itself reports. Unknown input yields no claims.
+    """
+    pairs: list[tuple[str, str]] = []
+    for raw in stdout.splitlines():
+        row = raw.strip()
+        if "|" not in row:
+            continue
+        parts = [p.strip() for p in row.split("|")]
+        if len(parts) < 5 or len(parts[0]) not in (12, 64):
+            continue
+        cid, image, name, status, ports = parts[0], parts[1], parts[2], parts[3], parts[4]
+        if not cid or not image:
+            continue
+        value = f"{name or cid[:12]} image={image} status={status[:40]}"
+        if ports:
+            value += f" ports={ports[:60]}"
+        pairs.append(("container", value[:220]))
+        up = "up" in status.lower()
+        if not up:
+            pairs.append(("container_stopped", f"{name or cid[:12]} ({status[:40]})"))
+    return pairs[:60]
+
+
+def _parse_trivy_config_json(stdout: str) -> list[tuple[str, str]]:
+    """trivy --format json (misconfigurations) → IaC posture claims.
+
+    Reads trivy's JSON misconfiguration results; every finding carries its
+    rule id and severity as trivy computed them (we never re-grade). Unknown
+    or truncated JSON yields no claims — deterministic parse discipline.
+    """
+    try:
+        doc = json.loads(stdout)
+    except (ValueError, TypeError):
+        return []
+    pairs: list[tuple[str, str]] = []
+    for result in doc.get("Results") or []:
+        target = str(result.get("Target") or "iac")[:80]
+        for misconfig in result.get("Misconfigurations") or []:
+            rid = str(misconfig.get("ID") or "?")[:40]
+            severity = str(misconfig.get("Severity") or "?").lower()
+            title = str(misconfig.get("Title") or "")[:80]
+            pairs.append(("iac_finding",
+                          f"{target}: {rid} [{severity}] {title}".strip()[:220]))
+    return pairs[:80]
 
 
 def collect_from_adapter(

@@ -47,11 +47,19 @@ from .broker import (
     NmapDiscoveryAdapter,
     PassiveDnsAdapter,
 )
+from .audit_ext import (
+    AUDIT_EXT_ADAPTERS,
+    DockerAuditAdapter,
+    IacAuditAdapter,
+)
 
 __all__ = [
     "ActionRequest",
+    "AUDIT_EXT_ADAPTERS",
     "DISCOVERY_ADAPTERS",
+    "DockerAuditAdapter",
     "HUNTER_ADAPTERS",
+    "IacAuditAdapter",
     "NucleiScanAdapter",
     "NiktoAdapter",
     "WpscanAdapter",

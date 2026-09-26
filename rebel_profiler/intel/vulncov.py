@@ -131,6 +131,18 @@ VULN_CLASSES: tuple[VulnClass, ...] = (
     VulnClass("wifi_privacy_surface", "Client privacy surface (STA exposure, probe hygiene)",
               "CWE-200", ("wlan-survey",),
               note="association-only records; probe SSIDs never captured"),
+    VulnClass("auth_session_hygiene", "Authenticated-session hygiene (cookie flags, rotation, cache)",
+              "CWE-614", ("docker-audit", "host-audit"),
+              note="one credentialed login per run via the web-auth-audit "
+                   "in-process plane (intel/auth_audit) — the operator's own "
+                   "test account, session flags + rotation + cache-control; "
+                   "paired here with the host/runtime hardening actions"),
+    VulnClass("container_posture", "Container runtime posture (privileged/root containers, exposure)",
+              "CWE-250", ("docker-audit",),
+              note="read-only `docker ps` inspection of the operator's own runtime"),
+    VulnClass("iac_misconfig", "IaC misconfiguration (Dockerfile/compose/K8s/Terraform)",
+              "CWE-16", ("iac-audit",),
+              note="offline trivy config scan of a file already on disk"),
 )
 
 
@@ -146,6 +158,7 @@ URL_TARGET_ACTIONS = frozenset({
     "js-intel", "nuclei-scan", "tech-fingerprint", "waf-detect",
     "httpx-probe", "tls-posture", "nikto-scan", "wpscan-audit",
     "cors-check", "graphql-introspection", "security-txt",
+    "web-auth-audit",
 })
 
 

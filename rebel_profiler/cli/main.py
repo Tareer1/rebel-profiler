@@ -1625,6 +1625,81 @@ def cmd_search(ctx: AppContext, args: argparse.Namespace) -> int:
         db.close()
 
 
+def cmd_audit_ext(ctx: AppContext, args: argparse.Namespace) -> int:
+    """Phase 13 planes: web-auth-audit + loopback traffic-proxy.
+
+    Both are in-process capabilities (not argv adapters): the audit plane
+    resolves the credential secret in-process (one login, no retries), the
+    proxy records the operator's own loopback traffic. Every result lands in
+    the case ledger as hash-chained evidence.
+    """
+    from ..intel.auth_audit import AuthenticatedPostureAuditor
+    from ..intel.claims import ClaimLedger
+    from ..intel.traffic_proxy import serve_traffic_proxy
+    from ..security.credentials import CredentialBroker
+
+    rec = ctx.find_case(args.case_id)
+    db = ctx.open_case(rec["id"])
+    try:
+        ledger = ClaimLedger.load_from_db(db, rec["id"])
+        evidence = ctx.evidence_store(db, rec["id"])
+        if args.audit_ext_command == "web-auth-audit":
+            cred_broker = CredentialBroker(db, AuditChain(db))
+            auditor = AuthenticatedPostureAuditor(
+                rec["id"], scope_engine=ctx.scope_engine(), ledger=ledger,
+                evidence=evidence, credential_broker=cred_broker,
+                actor=ctx.actor)
+            result = auditor.audit(
+                base_url=args.base_url, login_url=args.login_url,
+                credential=args.credential,
+                user_field=args.user_field, pass_field=args.pass_field)
+            data = result.as_dict()
+            data["case_id"] = rec["id"]
+            human = [f"web-auth-audit on {result.base_url}: {result.kind}"]
+            for check in result.checks:
+                marker = "PASS" if check["status"] == "pass" else "FINDING"
+                human.append(f"  [{marker}] {check['check']}: {check['detail']}")
+            if result.kind == "auth_failed":
+                human.append("  (one login attempt by design — never retried)")
+            emit({"human": "\n".join(human), "data": data}, args.output)
+            return EXIT_SUCCESS if result.kind == "audited" else 1
+
+        # traffic-proxy
+        handle = serve_traffic_proxy(
+            rec["id"], ledger=ledger, evidence=evidence,
+            listen_port=args.port, max_transactions=args.max_transactions)
+        import time as _time
+        try:
+            if args.duration:
+                _time.sleep(args.duration)
+            else:
+                print(f"recording on {handle['bind']}:{handle['port']} — Ctrl-C to stop; "
+                      f"open http://{handle['bind']}:{handle['port']} through your browser "
+                      "against your own lab app")
+                while len(handle["state"]["transactions"]) < handle["max_transactions"]:
+                    _time.sleep(0.5)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            handle["server"].shutdown()
+            handle["server"].server_close()
+        state = handle["state"]
+        human = [
+            f"recorded {state['count']} transaction(s) on "
+            f"{handle['bind']}:{handle['port']}",
+            f"  claims   : {len(state['claims'])}",
+            f"  clean    : {not state['injection_findings']}",
+        ]
+        emit({"human": "\n".join(human),
+              "data": {"case_id": rec["id"], "transactions": state["count"],
+                       "claims": len(state["claims"]),
+                       "injection_findings": state["injection_findings"]}},
+             args.output)
+        return EXIT_SUCCESS
+    finally:
+        db.close()
+
+
 def cmd_credential(ctx: AppContext, args: argparse.Namespace) -> int:
     from ..security.credentials import CredentialBroker
     from ..security.rbac import RoleEngine
@@ -2807,6 +2882,20 @@ def cmd_bounty(ctx: AppContext, args: argparse.Namespace) -> int:
 
                 print(to_markdown(data))
                 return EXIT_SUCCESS if report.findings else 1
+            if fmt == "html":
+                import sys as _sys
+
+                from ..intel.report_export import to_html
+
+                _sys.stdout.write(to_html(data))
+                return EXIT_SUCCESS if report.findings else 1
+            if fmt == "pdf":
+                import sys as _sys
+
+                from ..intel.report_export import to_pdf
+
+                _sys.stdout.buffer.write(to_pdf(data))
+                return EXIT_SUCCESS if report.findings else 1
             emit({"human": report.render_human(), "data": data},
                  args.output)
             return EXIT_SUCCESS if report.findings else 1
@@ -3694,6 +3783,27 @@ def build_parser() -> argparse.ArgumentParser:
     p_srb = search_subs.add_parser("rebuild", parents=[sub_common], help="rebuild the search index from claims")
     p_srb.add_argument("case_id")
 
+    # audit-ext — Phase 13 in-process planes (credentialed audit + loopback proxy)
+    p_ax = subs.add_parser("audit-ext", parents=[sub_common],
+                           help="authenticated web audit + loopback traffic proxy (own assets only)")
+    ax_subs = p_ax.add_subparsers(dest="audit_ext_command", required=True)
+    p_axw = ax_subs.add_parser("web-auth-audit", parents=[sub_common],
+                               help="one-login authenticated posture audit (session flags/rotation/cache)")
+    p_axw.add_argument("case_id")
+    p_axw.add_argument("base_url", help="in-scope http(s) base URL of YOUR app")
+    p_axw.add_argument("--login-url", required=True, help="in-scope absolute login handler URL")
+    p_axw.add_argument("--credential", required=True,
+                       help="stored credential name holding 'username:password' for the TEST account")
+    p_axw.add_argument("--user-field", default="username")
+    p_axw.add_argument("--pass-field", default="password")
+    p_axp = ax_subs.add_parser("proxy", parents=[sub_common],
+                               help="record YOUR browser traffic to your own lab app on 127.0.0.1")
+    p_axp.add_argument("case_id")
+    p_axp.add_argument("--port", type=int, default=18080)
+    p_axp.add_argument("--duration", type=int, default=0,
+                       help="stop after N seconds (omit: Ctrl-C or max transactions)")
+    p_axp.add_argument("--max-transactions", type=int, default=200)
+
     # credentials
     p_cred = subs.add_parser("credential", parents=[sub_common], help="encrypted, scoped credential broker (PDF 17)")
     cred_subs = p_cred.add_subparsers(dest="credential_command", required=True)
@@ -4066,11 +4176,12 @@ def build_parser() -> argparse.ArgumentParser:
     # the exporter formats ride a SEPARATE flag (--fmt) because argparse does
     # not allow a subparser to widen the parent's -o choices in place
     p_breport = bounty_subs.add_parser("report", parents=[sub_common],
-                                       help="final submission-ready report (real evidence only; --fmt sarif|markdown for exporters)")
+                                       help="final submission-ready report (real evidence only; --fmt sarif|markdown|html|pdf for exporters)")
     p_breport.add_argument("case_id")
     p_breport.add_argument("--fmt", dest="report_format", default="",
-                           choices=["sarif", "markdown"],
-                           help="export format: sarif = SARIF 2.1.0 (code scanning), markdown = disclosure draft")
+                           choices=["sarif", "markdown", "html", "pdf"],
+                           help="export format: sarif = SARIF 2.1.0, markdown = disclosure draft, "
+                                "html = self-contained client report, pdf = client deliverable (stdlib)")
     p_brun = bounty_subs.add_parser("run", parents=[sub_common],
                                     help="run the authorized check chain over every "
                                          "in-scope asset, then assess")
@@ -4198,6 +4309,7 @@ def main(argv: list[str] | None = None) -> int:
             "forge": cmd_forge,
             "system": cmd_system,
             "detection": cmd_detection,
+            "audit-ext": cmd_audit_ext,
             "complaint": cmd_complaint,
             "bounty": cmd_bounty,
             "doctor": cmd_doctor,

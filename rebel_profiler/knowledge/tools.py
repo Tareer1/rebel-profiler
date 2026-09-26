@@ -245,6 +245,14 @@ _GROUPS: tuple[ToolGroup, ...] = (
                  "Local hardening audit of the operator's OWN machine — "
                  "the blue-team baseline (targetless, defensive only).",
                  ("attack_defense", "system")),
+            Tool("docker-audit", "docker", "config_assessment", (),
+                 "Read-only container-runtime posture (docker ps) of the "
+                 "operator's own host: privileged/root containers, exposure.",
+                 ("system",)),
+            Tool("iac-audit", "trivy", "config_assessment", (),
+                 "Offline IaC misconfiguration audit (Dockerfile/compose/K8s/" 
+                 "Terraform) of a file already on disk; nothing is built.",
+                 ("system",)),
         ),
     ),
     ToolGroup(

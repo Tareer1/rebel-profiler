@@ -385,3 +385,63 @@ weakening a single gate. Every item keeps the Phase 1 invariants.
   language-neutral — pinned by tests/test_i18n.py. String coverage grows
   release by release; the scaffolding, the selection law and the fallback
   are what ship now
+
+## Phase 13 — Assessment-plane extensions: the five capability gaps ✅
+
+- [x] **Credentialed authenticated posture audit** (`web-auth-audit`,
+  in-process plane `intel/auth_audit.py`): the missing half of web
+  assessment — what an AUTHENTICATED session exposes. One login per run
+  with the operator's own test account stored through the CredentialBroker
+  (`username:password`); the secret never crosses a process boundary, never
+  reaches argv, never reaches stdout, and the redaction pipeline guards
+  every output path. Deterministic checks: session cookie flags
+  (Secure/HttpOnly/SameSite), session-id rotation between anonymous and
+  authenticated states, cache-control on authenticated pages, bounded MFA
+  hint detection. Every URL scope-validated fail-closed; redirects never
+  auto-followed; a rejected credential is an honest `auth_failed` answer,
+  never a retry. Failed checks become `auth_posture:*` claims bound to
+  hash-chained evidence. CLI: `rp audit-ext web-auth-audit`
+- [x] **Loopback recording proxy** (`traffic-proxy`, in-process plane
+  `intel/traffic_proxy.py`): authenticated attack-surface discovery through
+  the operator's OWN browser traffic to their OWN lab app. Binds
+  127.0.0.1 only (fixed, non-configurable); records method, path, header
+  subset (Cookie/Authorization stripped) and body hashes as evidence +
+  `proxy_transaction` claims; https CONNECT tunnels are recorded as opaque
+  events and never intercepted; the proxy is a dead-end tap (502 + close)
+  — observe, never rewrite, replay or forward. Bounded by
+  `max_transactions`. CLI: `rp audit-ext proxy`
+- [x] **Sigma / SIEM detection plane** (`sigma_ruleset` artifact kind in
+  the detection lab): deterministic Sigma YAML multi-document rules from
+  case IoCs — one stable-UUID rule per kind (domain `endswith`, hashes
+  `contains`, ips/urls/mutexes/registry literal), SIEM-agnostic logsource
+  block for the deploying analyst to pin. Same discipline as the YARA
+  builder: literals only, unknown input yields nothing, everything
+  hash-chained. Closes the "YARA yes, SIEM ingestion no" gap for
+  Elastic/Splunk/Wazuh pipelines
+- [x] **HTML + PDF report exporters** (`bounty report --fmt html|pdf`):
+  compliance-grade deliverables from the SAME report dict — no findings
+  invented in transit. `to_html` is a self-contained document (inline CSS,
+  zero scripting, zero external assets, everything HTML-escaped) with
+  severity badges and evidence ids visible. `to_pdf` renders a small valid
+  PDF 1.4 with ONLY the standard library: real object table, xref,
+  Helvetica base-14 fonts, flate-compressed streams, latin-1-safe text —
+  a client-ready file without a single new dependency. Empty reports
+  render as honest empty documents in both formats
+- [x] **Container & IaC posture adapters** (the cloud/container gap, local
+  half): `docker-audit` inspects the operator's own runtime through one
+  fixed read-only invocation (`docker ps -a --no-trunc --format …`)
+  turning rows into `container`/`container_stopped` claims — no param can
+  start, stop, exec, pull or build anything; `iac-audit` runs trivy
+  (`--scanners config --offline-scan` pinned) on a file already on disk —
+  Dockerfile/compose/K8s/Terraform misconfigurations become
+  `iac_finding` claims with trivy's own severities, nothing is uploaded
+  or built. Both follow the whitelisted-argv adapter contract, register
+  into the live registry, and carry validated vuln-coverage rows
+  (`container_posture` CWE-250, `iac_misconfig` CWE-16), action guides,
+  tool-matrix entries and collection parsers (unknown input → no claims)
+- [x] **New provenance sources**: `scan.webauth` (authenticated session
+  audit), `scan.proxy` (operator-made loopback traffic), `scan.iac`
+  (offline IaC static audit) — reliability-graded like every other source;
+  `auth_session_hygiene` (CWE-614) joins the vuln-coverage matrix with
+  paired hardening actions; CWE-614 and CWE-250 added to the offline CWE
+  seed; 36 new tests in `tests/test_phase13.py` pin the whole plane

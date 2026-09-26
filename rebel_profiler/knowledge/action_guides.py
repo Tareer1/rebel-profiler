@@ -42,6 +42,38 @@ class ActionGuide:
 
 
 _ACTION_GUIDES: tuple[ActionGuide, ...] = (
+    # ------------------------------------------------------ assessment extensions
+    ActionGuide(
+        action="docker-audit",
+        capability_class="config_assessment",
+        when=("The engagement covers the operator's own machine/container host "
+              "and the runtime posture is in scope (privileged containers, "
+              "exposure)."),
+        target_shape="literal local runtime marker (pass 'local')",
+        target_example="local",
+        params=(("socket", "optional explicit docker unix socket path"),),
+        example={"action": "docker-audit", "target": "local", "params": {}},
+        output_claims=("container", "container_stopped"),
+        reads_output=("Each container row becomes a container claim with image, "
+                      "status and ports; stopped containers are recorded too."),
+        next_steps=("host-audit", "iac-audit"),
+    ),
+    ActionGuide(
+        action="iac-audit",
+        capability_class="config_assessment",
+        when=("A Dockerfile, compose file, K8s manifest or Terraform file is "
+              "already on disk and its misconfiguration posture is in scope."),
+        target_shape="path to the IaC file or directory on this machine",
+        target_example="/home/operator/lab/Dockerfile",
+        params=(("severity", "optional minimum severity: unknown|low|medium|high|critical"),),
+        example={"action": "iac-audit",
+                 "target": "/home/operator/lab/Dockerfile", "params": {}},
+        output_claims=("iac_finding",),
+        reads_output=("Each trivy misconfiguration becomes an iac_finding claim "
+                      "with the rule id and trivy's own severity; nothing is "
+                      "uploaded and no image is pulled."),
+        next_steps=("docker-audit", "checksec"),
+    ),
     # ------------------------------------------------------ passive recon
     ActionGuide(
         action="passive-dns",

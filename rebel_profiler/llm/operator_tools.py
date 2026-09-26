@@ -615,11 +615,11 @@ def _bridge_state() -> dict:
     "collect",
     "Run ONE whitelisted Kali action against an in-scope target through the "
     "six gates and ingest the parsed claims (nikto-scan, wpscan-audit, "
-    "exploit-lookup, packet-capture, host-audit, port-scan, tech-fingerprint "
-    "…). High-risk actions land in the approval queue instead of running — "
-    "report that and let the operator decide.",
+    "exploit-lookup, packet-capture, host-audit, port-scan, tech-fingerprint, "
+    "docker-audit, iac-audit …). High-risk actions land in the approval "
+    "queue instead of running — report that and let the operator decide.",
     parameters={
-        "action": "the gated action name, e.g. nikto-scan or exploit-lookup",
+        "action": "the gated action name, e.g. nikto-scan, exploit-lookup or iac-audit",
         "target": "in-scope target for the action (host, URL, or query)",
         "params": "optional k=v pairs joined by ';' — e.g. 'port=443;ssl=1'",
     },

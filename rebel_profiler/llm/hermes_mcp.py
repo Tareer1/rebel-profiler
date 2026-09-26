@@ -29,7 +29,7 @@ import sys
 from pathlib import Path
 
 PROTOCOL_VERSION = "2024-11-05"
-SERVER_INFO = {"name": "rebel-profiler", "version": "1.6.3"}
+SERVER_INFO = {"name": "rebel-profiler", "version": "1.7.0"}
 
 # The tool surface hermes-agent gets. Deliberately the operator plane —
 # claims/approvals/probe/browser/reports — not a shell, not raw adapters.
