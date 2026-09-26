@@ -5,9 +5,10 @@ Two operator-facing capabilities, both deterministic and evidence-driven:
 **attack_plan(case_id)** — reads ONLY the case's claim ledger and turns the
 recon picture into ranked, concrete attack strategies: what to try, where
 exactly, why (which claims prove the opening), which executable action
-verifies it, and the payload category that applies. This is the
-"isko hack karne ke tarike dundo" answer — every strategy names a REAL
-action from the live registry, so the next step is always executable.
+verifies it, and the payload category that applies. This answers the
+operator's "what could an attacker actually try here?" question — every
+strategy names a REAL action from the live registry, so the next step is
+always executable.
 
 **payload build/list** — deterministic, BENIGN proof-of-impact payloads per
 vulnerability class (reflected XSS marker, SQLi error/timing probes, SSTI

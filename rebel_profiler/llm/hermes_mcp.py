@@ -29,7 +29,7 @@ import sys
 from pathlib import Path
 
 PROTOCOL_VERSION = "2024-11-05"
-SERVER_INFO = {"name": "rebel-profiler", "version": "1.0.0"}
+SERVER_INFO = {"name": "rebel-profiler", "version": "1.6.1"}
 
 # The tool surface hermes-agent gets. Deliberately the operator plane —
 # claims/approvals/probe/browser/reports — not a shell, not raw adapters.
@@ -39,7 +39,8 @@ _MCP_TOOLS = (
     "evidence_verify", "audit_verify", "knowledge_search", "glossary",
     "hunt_run", "hunt_triage", "probe_suggest", "approval_list",
     "approval_decide", "browser_grab", "scope_show", "scope_add",
-    "collect",
+    "collect", "cwe_lookup", "cwe_search", "cwe_blind_spots",
+    "anomalies",
 )
 
 

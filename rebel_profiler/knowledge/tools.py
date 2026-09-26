@@ -96,6 +96,14 @@ _GROUPS: tuple[ToolGroup, ...] = (
             Tool("dns-enum", "dnsrecon", "passive_recon", (),
                  "Standard DNS enumeration incl. zone-transfer checks.",
                  ("footprinting", "enumeration")),
+            Tool("security-txt", "curl", "passive_recon", (),
+                 "RFC 9116 security.txt discovery at both canonical "
+                 "locations — disclosure-contact posture of the domain.",
+                 ("footprinting",)),
+            Tool("email-spoof", "dig", "passive_recon", (),
+                 "SPF/DMARC TXT posture for ONE authorized domain — spoofing "
+                 "prerequisites via DNS only; no mail is ever sent.",
+                 ("footprinting", "social_engineering")),
         ),
     ),
     ToolGroup(
@@ -174,6 +182,14 @@ _GROUPS: tuple[ToolGroup, ...] = (
                  "WordPress version/plugin/theme exposure audit — no brute "
                  "force, no aggressive enumeration.",
                  ("scanning", "enumeration")),
+            Tool("cors-check", "curl", "web_assessment", ("confirmation",),
+                 "One foreign-Origin probe; reflected ACAO (+credentials) is "
+                 "the exploitable CORS misconfig shape — detection only.",
+                 ("attack_defense",)),
+            Tool("graphql-introspection", "curl", "web_assessment", ("confirmation",),
+                 "Minimal __schema probe of ONE endpoint: is the GraphQL "
+                 "schema publicly readable (CWE-200 posture)? No dump, no mutations.",
+                 ("web", "enumeration")),
         ),
     ),
     ToolGroup(

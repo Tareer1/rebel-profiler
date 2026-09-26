@@ -353,6 +353,50 @@ class TestPlanner:
         assert "<|im_start|>system" in captured["prompt"]
         assert "lab.example.test" in captured["user"]
 
+    def test_llm_planner_switches_to_compact_when_context_tight(self):
+        """Prompt too big for the tier's context → the compact render ships.
+
+        Regression: the compact kwarg existed but a getattr check clobbered
+        it, so tiny/low-tier planning always shipped the full guides contract
+        and blew the context budget (audit fix follow-up).
+        """
+        import types
+
+        from rebel_profiler.llm.planner import LlmPlanner
+
+        captured = {}
+
+        class _ChatEngine:
+            loaded = True
+            model_id = "fake-tiny"
+
+            def generate(self, prompt, **kw):
+                captured["prompt"] = prompt
+                return types.SimpleNamespace(
+                    text='[{"action": "passive-dns", '
+                         '"target": "lab.example.test", '
+                         '"params": {}, "reason": "resolve"}]')
+
+        import dataclasses
+        tiny_ctx = dataclasses.replace(DEFAULT_LIMITS["tiny"],
+                                       max_context_tokens=256)
+        plane = ModelPlane(limits=tiny_ctx)
+        plane._engine = _ChatEngine()
+        plane._engine_kind = "gguf"
+        plane.select_engine = lambda model, **kw: plane._engine  # already loaded
+        planner = LlmPlanner(plane,
+                             registry=_Registry({
+                                 "passive-dns": _Adapter("passive-dns",
+                                                         ["record_type"])}))
+        view = self._view()
+        planner(view)
+        sent = captured["prompt"]
+        # compact shape: no per-action guides JSON, one-line contract lines
+        assert "AVAILABLE ACTIONS" not in sent
+        assert "passive-dns" in sent and "record_type" in sent
+        # and it is genuinely smaller than the full render
+        assert len(sent) < len(build_plan_prompt(view))
+
     def test_plane_chat_generate_routes_through_template(self):
         """ModelPlane.chat_generate applies the engine's chat_prompt."""
         import types

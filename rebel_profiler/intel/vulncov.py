@@ -94,7 +94,8 @@ VULN_CLASSES: tuple[VulnClass, ...] = (
     VulnClass("hidden_params", "Undocumented attack-surface parameters",
               "CWE-471", ("param-hunt", "wayback-urls")),
     VulnClass("api_surface", "Unauthenticated API surface",
-              "CWE-306", ("js-intel", "katana-crawl", "web-crawl"),
+              "CWE-306", ("js-intel", "katana-crawl", "web-crawl",
+                          "graphql-introspection"),
               payload_class="idor_pivot"),
     VulnClass("subdomain_takeover", "Dangling DNS → takeover prerequisites",
               "CWE-350", ("subfinder-enum", "subdomain-enum", "httpx-probe",
@@ -104,6 +105,17 @@ VULN_CLASSES: tuple[VulnClass, ...] = (
               "CWE-200", ("js-intel", "dork-search", "wayback-urls")),
     VulnClass("email_exposure", "Email/personnel surface (phishing prerequisites)",
               "CWE-359", ("email-osint",)),
+    VulnClass("email_spoofing", "Email spoofing prerequisites (missing/soft SPF-DMARC)",
+              "CWE-359", ("email-spoof",),
+              note="DNS-only observation: no mail is ever sent; p=none/absent "
+                   "DMARC IS the finding"),
+    VulnClass("cors_misconfig", "CORS misconfiguration (reflected origin, credentials)",
+              "CWE-942", ("cors-check", "header-audit"),
+              note="one foreign-Origin probe; reflected ACAO + credentials = "
+                   "the exploitable shape"),
+    VulnClass("security_contact", "Missing security.txt / disclosure contact (RFC 9116)",
+              "CWE-16", ("security-txt",),
+              note="reportability gap, not a vuln: presence is the control"),
     VulnClass("dns_health", "DNS misconfiguration (zone transfer, dangling records)",
               "CWE-16", ("dns-enum", "dns-lookup", "passive-dns")),
     VulnClass("service_exposure", "Cleartext/risky network services",
@@ -133,6 +145,7 @@ URL_TARGET_ACTIONS = frozenset({
     "web-crawl",    "katana-crawl", "header-audit", "param-hunt", "dir-enum",
     "js-intel", "nuclei-scan", "tech-fingerprint", "waf-detect",
     "httpx-probe", "tls-posture", "nikto-scan", "wpscan-audit",
+    "cors-check", "graphql-introspection", "security-txt",
 })
 
 

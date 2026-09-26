@@ -84,6 +84,7 @@ def _builtin_entries() -> tuple[CWEEntry, ...]:
         ("639", "Authorization Bypass Through User-Controlled Key", "The product's authorization checks a user-controlled key (IDOR class) that references an object the actor cannot access.", "high", "Base"),
         ("693", "Protection Mechanism Failure", "The product does not protect or incorrectly protects against a weakness (missing headers, disabled mitigations).", "high", "Class"),
         ("940", "Improper Verification of Source (Rogue AP / spoofed origin)", "The product does not verify the source of a communication, enabling spoofed-origin attacks.", "medium", "Base"),
+        ("942", "Permissive Cross-domain Policy with Untrusted Domains", "The product uses an overly permissive cross-origin policy (reflected Access-Control-Allow-Origin, wildcard) that lets untrusted origins read authorized responses.", "high", "Variant"),
         ("1004", "Sensitive Cookie Without 'HttpOnly' Flag", "The product uses a cookie for sensitive information without the HttpOnly flag.", "medium", "Variant"),
         ("1059", "Insufficient Technical Documentation / WAF reliance", "The product relies on a front-end filter (e.g. WAF) as its only defense — the origin stays reachable.", "medium", "Class"),
         ("1104", "Use of Unmaintained Third Party Components", "The product relies on third-party components that are unmaintained or vulnerable (version exposure).", "high", "Class"),

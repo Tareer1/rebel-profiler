@@ -254,6 +254,128 @@ RULES: tuple[Rule, ...] = (
         reproduce="wpscan --url {url}",
         impact="CMS version/component details aid targeted attacks.",
     ),
+    # ---- CORS / security.txt / GraphQL / email-spoof (web-expansion) ----
+    Rule(
+        prefix="cors_check:acao_reflected:yes",
+        title="CORS reflects arbitrary origin",
+        severity="high",
+        cwe="CWE-942",
+        remediation="Do not reflect the Origin header; serve an explicit "
+                    "allow-list of trusted origins and never combine a "
+                    "reflected ACAO with Access-Control-Allow-Credentials.",
+        reproduce="curl -sSI -H 'Origin: https://attacker.example' {url}",
+        impact="Any website can read authenticated responses from the "
+               "victim's browser when credentials are allowed.",
+    ),
+    Rule(
+        prefix="cors_check:acao_reflected:no",
+        title="CORS control present (no reflection)",
+        severity="informational",
+        cwe="CWE-942",
+        remediation="No action: the origin check held against a foreign "
+                    "Origin probe.",
+        reproduce="curl -sSI -H 'Origin: https://attacker.example' {url}",
+        impact="Cross-origin reads are blocked — recorded so the report can "
+               "show the control was tested.",
+    ),
+    Rule(
+        prefix="cors_check:acao_present",
+        title="CORS allows specific origins",
+        severity="informational",
+        cwe="CWE-942",
+        remediation="Verify the allow-listed origins are all intended; an "
+                    "over-broad list (wildcard subdomains, abandoned "
+                    "domains) widens the cross-origin surface.",
+        reproduce="curl -sSI -H 'Origin: https://attacker.example' {url}",
+        impact="Cross-origin access is limited to named origins.",
+    ),
+    Rule(
+        prefix="securitytxt_check:security.txt missing",
+        title="Missing security.txt (RFC 9116)",
+        severity="informational",
+        cwe="CWE-16",
+        remediation="Publish /.well-known/security.txt with a Contact field "
+                    "so researchers can reach you instead of exploiting.",
+        reproduce="curl -sS {url}/.well-known/security.txt",
+        impact="Researchers lack a disclosure channel — a reportability gap, "
+               "not a vulnerability.",
+    ),
+    Rule(
+        prefix="securitytxt_check:security.txt present",
+        title="security.txt published (RFC 9116)",
+        severity="informational",
+        cwe="CWE-16",
+        remediation="No action: the disclosure contact is discoverable. Keep "
+                    "the Expires field current.",
+        reproduce="curl -sS {url}/.well-known/security.txt",
+        impact="Coordinated disclosure is supported.",
+    ),
+    Rule(
+        prefix="graphql_introspection:introspection:enabled",
+        title="GraphQL introspection publicly enabled",
+        severity="low",
+        cwe="CWE-200",
+        remediation="Disable introspection on production endpoints (allow "
+                    "it only for whitelisted tooling) and require "
+                    "authentication for schema reads.",
+        reproduce="curl -sS {url} -X POST -H 'Content-Type: application/json' "
+                  '-d \'{"query":"{ __schema { queryType { name } } }"}\'',
+        impact="The full API schema is readable by anyone, handing attackers "
+               "a complete map of queries and mutations.",
+    ),
+    Rule(
+        prefix="graphql_introspection:introspection:disabled",
+        title="GraphQL introspection disabled",
+        severity="informational",
+        cwe="CWE-200",
+        remediation="No action: the schema is not publicly readable.",
+        reproduce="curl -sS {url} -X POST -H 'Content-Type: application/json' "
+                  "-d '{\"query\":\"{ __schema { queryType { name } } }\"}'",
+        impact="Schema exposure is mitigated.",
+    ),
+    Rule(
+        prefix="email_spoofing:spoofing posture:no SPF",
+        title="Domain spoofable: no SPF and no DMARC",
+        severity="medium",
+        cwe="CWE-359",
+        remediation="Publish an SPF record listing authorised senders and a "
+                    "DMARC record starting at p=none with reports, moving "
+                    "to p=quarantine/reject once clean.",
+        reproduce="dig +short TXT {host}; dig +short TXT _dmarc.{host}",
+        impact="Anyone can send email that passes casual checks as this "
+               "domain — a direct phishing prerequisite.",
+    ),
+    Rule(
+        prefix="email_spoofing:spoofing posture:spf:absent",
+        title="Missing SPF record",
+        severity="low",
+        cwe="CWE-359",
+        remediation="Publish an SPF record listing authorised senders; keep "
+                    "DMARC enforcement in place.",
+        reproduce="dig +short TXT {host}",
+        impact="Unlisted senders are not filtered by receiver-side SPF.",
+    ),
+    Rule(
+        prefix="email_spoofing:spoofing posture:dmarc:present; p=none",
+        title="DMARC policy is p=none (not enforcing)",
+        severity="low",
+        cwe="CWE-359",
+        remediation="Move DMARC from p=none to p=quarantine, then p=reject, "
+                    "once reports confirm legitimate senders align.",
+        reproduce="dig +short TXT _dmarc.{host}",
+        impact="Spoofed mail still reaches inboxes; only monitoring happens.",
+    ),
+    Rule(
+        prefix="email_spoofing:spoofing posture:dmarc:absent",
+        title="No DMARC record",
+        severity="medium",
+        cwe="CWE-359",
+        remediation="Publish a DMARC record (v=DMARC1) with rua reports; "
+                    "enforce with p=quarantine/reject when ready.",
+        reproduce="dig +short TXT _dmarc.{host}",
+        impact="Receivers have no domain-owner guidance for handling "
+               "spoofed mail.",
+    ),
     Rule(
         prefix="exploit_candidate",
         title="Published exploit exists (offline EDB lookup)",

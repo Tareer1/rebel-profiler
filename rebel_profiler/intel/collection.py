@@ -691,6 +691,127 @@ def _parse_wpscan_text(stdout: str) -> list[tuple[str, str]]:
     return pairs[:60]
 
 
+def _parse_cors_headers(stdout: str) -> list[tuple[str, str]]:
+    """curl -i response to a foreign-Origin request: the ACAO verdict.
+
+    One POST-less GET, one verdict claim. Reflected ACAO with credentials
+    allowed is the exploitable CORS misconfig shape; a missing ACAO (the
+    correct posture) is recorded as a clean check so the report can say
+    the control was tested — an empty result is indistinguishable from an
+    unrun one, and the deterministic-parser discipline forbids that.
+    """
+    # curl -sS appends error lines to stderr; stdout of -i is headers+body
+    lower = stdout.lower()
+    acao = ""
+    acac = ""
+    for line in stdout.splitlines():
+        stripped = line.strip()
+        low = stripped.lower()
+        if low.startswith("access-control-allow-origin:"):
+            acao = stripped.split(":", 1)[1].strip()
+        elif low.startswith("access-control-allow-credentials:"):
+            acac = stripped.split(":", 1)[1].strip().lower()
+    if not acao:
+        return [("cors_check", "acao_reflected:no")]
+    reflected = "evil-cors-probe.example" in acao.lower()
+    if reflected and acac == "true":
+        verdict = "acao_reflected:yes; allow-credentials:true — exploitable shape"
+    elif reflected:
+        verdict = "acao_reflected:yes; allow-credentials not true"
+    else:
+        verdict = f"acao_present:{acao[:80]}"
+    return [("cors_check", verdict)]
+
+
+def _parse_security_txt(stdout: str) -> list[tuple[str, str]]:
+    """Two curl fetches (/.well-known/security.txt, /security.txt) → verdict.
+
+    Either canonical location counts as present (RFC 9116); presence is
+    the control. Field lines (Contact:, Policy:) become context claims —
+    they tell the operator where to report, they are not findings.
+    """
+    pairs: list[tuple[str, str]] = []
+    present = False
+    for block in stdout.split("--\r\n"):
+        head = block[:2048]
+        if not head.strip("\r\n"):
+            continue
+        # first line of a curl -i response block is the HTTP status line
+        status_line = head.splitlines()[0] if head.splitlines() else ""
+        if re.search(r"HTTP/[\d.]+\s+2\d\d", status_line):
+            present = True
+        for line in head.splitlines()[1:]:
+            stripped = line.strip()
+            if stripped[:8].lower() in {"contact:", "policy:", "expires:"}:
+                value = stripped[:160]
+                if ("securitytxt_field", value.lower()) not in [
+                        (k, v.lower()) for k, v in pairs]:
+                    pairs.append(("securitytxt_field", value))
+    pairs.append(("securitytxt_check",
+                  "security.txt present (RFC 9116)" if present
+                  else "security.txt missing at both canonical locations"))
+    return pairs[:20]
+
+
+def _parse_graphql_introspection(stdout: str) -> list[tuple[str, str]]:
+    """curl POST of a minimal __schema probe → one exposure verdict.
+
+    The probe asks ONLY for the query type's name — no schema dump, no
+    mutations. A JSON body naming a queryType means introspection is
+    publicly readable (CWE-200 posture); an error/denial body means it is
+    closed. Anything unparseable yields NO claim.
+    """
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, dict):
+        return []
+    if "errors" in payload and "data" not in payload:
+        detail = str(payload["errors"])[:140]
+        return [("graphql_introspection", f"introspection:disabled ({detail})")]
+    data = payload.get("data")
+    if isinstance(data, dict) and isinstance(data.get("__schema"), dict):
+        qtype = (data["__schema"].get("queryType") or {}).get("name")
+        if qtype:
+            return [("graphql_introspection",
+                     f"introspection:enabled; queryType={qtype[:60]} — "
+                     "schema is publicly readable (CWE-200 posture)")]
+    return []
+
+
+def _parse_dmarc(stdout: str) -> list[tuple[str, str]]:
+    """dig +short TXT domain + _dmarc.domain → SPF/DMARC posture.
+
+    dig prints one TXT record per line (quoted chunks). The FIRST chunk
+    matching v=spf1 / v=DMARC1 wins per protocol; enforcement is read
+    from the policy tag. A domain with no SPF and p=none (or no DMARC at
+    all) is spoofable — the phishing-prerequisite finding.
+    """
+    spf: str | None = None
+    dmarc: str | None = None
+    for raw in stdout.splitlines():
+        line = raw.strip().strip('"')
+        low = line.lower()
+        if spf is None and low.startswith("v=spf1"):
+            spf = line
+        elif dmarc is None and low.startswith("v=dmarc1"):
+            dmarc = line
+    if spf is None and dmarc is None:
+        return [("email_spoofing",
+                 "spoofing posture:no SPF and no DMARC — domain is spoofable")]
+    spf_state = ("spf:present" if spf else "spf:absent")
+    if dmarc is None:
+        dmarc_state = "dmarc:absent"
+    else:
+        m = re.search(r"p=(\w+)", dmarc, re.IGNORECASE)
+        policy = (m.group(1).lower() if m else "none")
+        dmarc_state = f"dmarc:present; p={policy}"
+        if policy not in {"quarantine", "reject"}:
+            dmarc_state += " — non-enforcing (spoofing possible)"
+    return [("email_spoofing", f"spoofing posture:{spf_state}; {dmarc_state}")]
+
+
 def _parse_searchsploit_json(stdout: str) -> list[tuple[str, str]]:
     """searchsploit --json: {"RESULTS_EXPLOIT":[{Title,ID,...}]}.
 
@@ -1284,6 +1405,14 @@ class CollectionPipeline:
             pairs = _parse_param_hunt(stdout, subject)
         elif effective_action == "nuclei-scan":
             pairs = _parse_nuclei_jsonl(stdout)
+        elif effective_action == "cors-check":
+            pairs = _parse_cors_headers(stdout)
+        elif effective_action == "security-txt":
+            pairs = _parse_security_txt(stdout + "\n" + stderr)
+        elif effective_action == "graphql-introspection":
+            pairs = _parse_graphql_introspection(stdout)
+        elif effective_action == "email-spoof":
+            pairs = _parse_dmarc(stdout + "\n" + stderr)
         elif effective_action == "nikto-scan":
             pairs = _parse_nikto_csv(stdout)
         elif effective_action == "wpscan-audit":
@@ -1400,6 +1529,10 @@ class CollectionPipeline:
             "wlan-monitor": "scan.wireless",
             "wlan-ap-audit": "scan.wireless",
             "probe": "scan.web",
+            "cors-check": "scan.web",
+            "security-txt": "scan.web",
+            "graphql-introspection": "scan.web",
+            "email-spoof": "dns.authoritative",
         }.get(action, "unknown")
 
 

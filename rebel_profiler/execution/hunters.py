@@ -383,6 +383,124 @@ class LynisAuditAdapter(Adapter):
                 "--no-colors", "--plugin-dir", "/dev/null"]
 
 
+class CORSCheckAdapter(Adapter):
+    """CORS misconfiguration check (curl -sSI) against ONE authorized origin.
+
+    Reflects an arbitrary Origin and reads back Access-Control-Allow-Origin.
+    A reflected ACAO without a matching credential policy is the classic
+    exploitable CORS misconfig — detection only, one request, no exploitation.
+    """
+
+    name = "cors-check"
+    binary = "curl"
+    capability_class = "web_assessment"
+    allowed_params = ("port", "scheme")
+    required_params = ()
+
+    _HOSTNAME = r"[A-Za-z0-9.-]+"
+    _PORT = r"\d{1,5}"
+    _SCHEME = r"https?"
+
+    def build_argv(self, request):
+        host = _single_token(request.target, field="host",
+                             pattern=self._HOSTNAME)
+        port = request.params.get("port")
+        if port is not None:
+            port = _single_token(port, field="port", pattern=self._PORT)
+            if not (1 <= int(port) <= 65535):
+                raise UsageError(f"port out of range: {port}",
+                                 action="Use 1-65535.")
+        scheme = str(request.params.get("scheme", "https"))
+        scheme = _single_token(scheme, field="scheme", pattern=self._SCHEME)
+        url = f"{scheme}://{host}" + (f":{port}" if port else "")
+        return [self.binary, "-sS", "-i", "--max-time", "30",
+                "-H", "Origin: https://evil-cors-probe.example",
+                "-A", "rebel-profiler cors-check", url]
+
+
+class SecurityTxtAdapter(Adapter):
+    """RFC 9116 security.txt discovery (curl) at the canonical locations.
+
+    Missing security.txt is a reportability gap, not a vulnerability; a
+    PRESENT one gives the operator the program's contact and policy —
+    both outcomes are evidence for coordinated disclosure.
+    """
+
+    name = "security-txt"
+    binary = "curl"
+    capability_class = "passive_recon"
+    allowed_params = ()
+    required_params = ()
+
+    _HOSTNAME = r"[A-Za-z0-9.-]+"
+
+    def build_argv(self, request):
+        host = _single_token(request.target, field="host",
+                             pattern=self._HOSTNAME)
+        # -i so the parser sees each response's status line: two fetches,
+        # either canonical location presenting 200 is RFC 9116 compliance.
+        return [self.binary, "-sS", "-i", "--max-time", "30",
+                f"https://{host}/.well-known/security.txt",
+                f"https://{host}/security.txt"]
+
+
+class GraphqlIntrospectionAdapter(Adapter):
+    """GraphQL introspection check (curl POST) against ONE authorized origin.
+
+    A minimal introspection query (no destructive mutations) reveals
+    whether the schema is publicly readable — an information-exposure
+    posture finding. One request, evidence-captured.
+    """
+
+    name = "graphql-introspection"
+    binary = "curl"
+    capability_class = "web_assessment"
+    allowed_params = ("path",)
+    required_params = ()
+
+    _HOSTNAME = r"[A-Za-z0-9.-]+"
+    _PATH = r"/[A-Za-z0-9._/-]{0,80}"
+    _URL = r"https?://[A-Za-z0-9./_~:?#@!$&()*+,;=%-]+"
+
+    def build_argv(self, request):
+        path = str(request.params.get("path", "/graphql")).strip()
+        path = _single_token(path if path.startswith("/") else "/" + path,
+                             field="path", pattern=self._PATH)
+        if "://" in request.target:
+            url = _single_token(request.target, field="url", pattern=self._URL)
+        else:
+            host = _single_token(request.target, field="host",
+                                 pattern=self._HOSTNAME)
+            url = f"https://{host}{path}"
+        query = '{"query":"{ __schema { queryType { name } } }"}'
+        return [self.binary, "-sS", "-i", "--max-time", "30",
+                "-X", "POST", "-H", "Content-Type: application/json",
+                "-d", query, url]
+
+
+class EmailSpoofAdapter(Adapter):
+    """Email spoofing posture via DNS (dig TXT) for ONE authorized domain.
+
+    Reads SPF and DMARC TXT records — no mail is ever sent. A missing or
+    non-enforcing policy (p=none, no SPF) is a phishing-prerequisite
+    finding with full provenance.
+    """
+
+    name = "email-spoof"
+    binary = "dig"
+    capability_class = "passive_recon"
+    allowed_params = ()
+    required_params = ()
+
+    _DOMAIN = r"[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+
+    def build_argv(self, request):
+        domain = _single_token(request.target, field="domain",
+                               pattern=self._DOMAIN)
+        return [self.binary, "+short", "TXT", domain,
+                "+short", "TXT", f"_dmarc.{domain}"]
+
+
 HUNTER_ADAPTERS: tuple[type[Adapter], ...] = (
     SubfinderAdapter,
     HttpxAdapter,
@@ -395,4 +513,8 @@ HUNTER_ADAPTERS: tuple[type[Adapter], ...] = (
     SearchsploitAdapter,
     TcpdumpCaptureAdapter,
     LynisAuditAdapter,
+    CORSCheckAdapter,
+    SecurityTxtAdapter,
+    GraphqlIntrospectionAdapter,
+    EmailSpoofAdapter,
 )

@@ -119,6 +119,7 @@ footer{margin-top:26px;color:var(--text-dim);font-size:11px;font-family:var(--fo
     <button data-s="dorks" title="Dorking">⌕</button>
     <button data-s="surface" title="Surface">⬡</button>
     <button data-s="bins" title="Binary analysis">⛁</button>
+    <button data-s="webcheck" title="Web exposure & knowledge">◎</button>
     <button data-s="approvals" title="Approval queue">✋</button>
     <button data-s="bridge" title="Browser bridge">⇄</button>
     <div class="spacer"></div>
@@ -240,6 +241,40 @@ footer{margin-top:26px;color:var(--text-dim);font-size:11px;font-family:var(--fo
           <div style="max-width:120px"><label>&nbsp;</label><button class="btn primary" id="bn-go">run</button></div>
         </div>
         <div id="bn-out" style="margin-top:12px"></div>
+      </div>
+    </section>
+
+    <!-- WEB EXPOSURE + CWE KNOWLEDGE -->
+    <section class="screen" id="s-webcheck">
+      <div class="panel"><h2>Web exposure checks (one origin at a time)</h2>
+        <div class="row">
+          <div><label>Case</label><select id="wp-case"></select></div>
+          <div><label>Target</label><input id="wp-target" placeholder="h1.lab.example.test"></div>
+        </div>
+        <div class="row">
+          <div><label>Check</label>
+            <select id="wp-action">
+              <option value="cors_check|8443|https">cors-check · reflected ACAO probe</option>
+              <option value="security_txt||">security-txt · RFC 9116 disclosure</option>
+              <option value="graphql_introspection|/graphql|">graphql-introspection · schema readable?</option>
+              <option value="email_spoof||">email-spoof · SPF/DMARC posture</option>
+            </select></div>
+          <div style="max-width:120px"><label>&nbsp;</label><button class="btn primary" id="wp-go">run</button></div>
+        </div>
+        <div id="wp-out" style="margin-top:12px"></div>
+      </div>
+      <div class="panel"><h2>CWE knowledge & unknown-vuln candidates</h2>
+        <div class="row">
+          <div style="max-width:200px"><label>CWE lookup</label><input id="wp-cwe-ref" placeholder="79 / CWE-639 / open redirect"></div>
+          <div style="max-width:120px"><label>&nbsp;</label><button class="btn" id="wp-cwe-go">lookup</button></div>
+          <div style="max-width:200px"><label>CWE search</label><input id="wp-cwe-term" placeholder="redirect, cookie, template"></div>
+          <div style="max-width:120px"><label>&nbsp;</label><button class="btn" id="wp-cwe-search">search</button></div>
+        </div>
+        <div class="row">
+          <div style="max-width:150px"><label>&nbsp;</label><button class="btn" id="wp-blind">case blind spots</button></div>
+          <div style="max-width:150px"><label>&nbsp;</label><button class="btn" id="wp-anom">anomalies</button></div>
+        </div>
+        <div id="wp-knowledge-out" style="margin-top:12px"></div>
       </div>
     </section>
 
@@ -405,7 +440,7 @@ async function loadCases(){
   tbody.querySelectorAll("button[data-act]").forEach(b=>b.onclick=async()=>{
     await cli("case_activate",{case:b.dataset.act}); loadCases(); refreshState();});  // fill dork/bridge/approval case selects
   const selHtml=cases.map(c=>`<option>${esc(c.id)}</option>`).join("");
-  for(const id of ["dk-case","bg-case","ap-case","bn-case"]) $("#"+id).innerHTML=selHtml||"";
+  for(const id of ["dk-case","bg-case","ap-case","bn-case","wp-case"]) $("#"+id).innerHTML=selHtml||"";
 }
 $("#nc-go").onclick=async()=>{
   const name=$("#nc-name").value.trim(), desc=$("#nc-desc").value.trim(),
@@ -498,6 +533,59 @@ $("#dk-go").onclick=async()=>{
     +(r&&r.stderr?`<p class="warn mono" style="font-size:11px;margin-top:8px">${esc(r.stderr)}</p>`:"");
   refreshState();
 };
+
+/* ---------- web exposure + cwe knowledge ---------- */
+const wpGo=$("#wp-go");
+if(wpGo){wpGo.onclick=async()=>{
+  const c=$("#wp-case").value, t=$("#wp-target").value.trim(),
+        [cmd,p1,p2]=$("#wp-action").value.split("|");
+  if(!c||!t){$("#wp-out").innerHTML='<div class="empty">pick a case + target</div>';return;}
+  $("#wp-out").innerHTML='<div class="working">probing…</div>';
+  const params={case:c,target:t};
+  if(p1){params.text=p1;} if(p2){params.text2=p2;}
+  const r=await cli(cmd,params);
+  const data=r&&r.result?r.result:r;
+  const claims=(data&&data.claims)||[];
+  $("#wp-out").innerHTML=(claims.length?
+    '<table><tbody>'+claims.map(x=>'<tr><td class="mono">'+esc(x.kind)+'</td><td class="mono">'+esc(String(x.value).slice(0,110))+'</td></tr>').join('')+'</tbody></table>'
+    :'<div class="empty">no claims (run failed, or the reply parsed to nothing — check the proxy log)</div>');
+  refreshState();
+};}
+if($("#wp-cwe-go")){$("#wp-cwe-go").onclick=async()=>{
+  const ref=$("#wp-cwe-ref").value.trim(); if(!ref) return;
+  const r=await cli("cwe_lookup",{text:ref});
+  const d=(r&&r.data)||r||{}; const e=d.entry||d;
+  $("#wp-knowledge-out").innerHTML=(d.found===false||!e.id&&!e.name?
+    '<div class="empty">no such CWE — try search</div>'
+    :'<table><tbody>'+(e.id?`<tr><td class="mono">${esc(e.id)}</td><td>${esc(e.name||"")}</td></tr>`:"")
+      +(e.description?`<tr><td></td><td>${esc(String(e.description).slice(0,300))}</td></tr>`:"")
+      +(e.likelihood?`<tr><td>likelihood</td><td>${esc(e.likelihood)}</td></tr>`:"")
+      +'</tbody></table>');
+};}
+if($("#wp-cwe-search")){$("#wp-cwe-search").onclick=async()=>{
+  const term=$("#wp-cwe-term").value.trim(); if(!term) return;
+  const r=await cli("cwe_search",{text:term});
+  const d=(r&&r.data)||r||{}; const rows=d.results||[];
+  $("#wp-knowledge-out").innerHTML=(rows.length?
+    '<table><tbody>'+rows.map(x=>`<tr><td class="mono">${esc(x.id)}</td><td>${esc(x.name||"")}</td></tr>`).join('')+'</tbody></table>'
+    :'<div class="empty">no matches (3+ characters, keyword)</div>');
+};}
+if($("#wp-blind")){$("#wp-blind").onclick=async()=>{
+  const c=$("#wp-case").value; if(!c) return;
+  const r=await cli("cwe_blind_spots",{case:c});
+  const d=(r&&r.data)||r||{}; const rows=d.rows||d.blind_spots||d.items||[];
+  $("#wp-knowledge-out").innerHTML=(rows.length?
+    '<table><tbody>'+rows.map(x=>`<tr><td class="mono">${esc(x.cwe||x.id||"")}</td><td>${esc(x.title||x.name||x.detail||"")}</td></tr>`).join('')+'</tbody></table>'
+    :'<div class="empty">no blind spots yet (or the case has no claims)</div>');
+};}
+if($("#wp-anom")){$("#wp-anom").onclick=async()=>{
+  const c=$("#wp-case").value; if(!c) return;
+  const r=await cli("anomalies",{case:c});
+  const d=(r&&r.data)||r||{}; const rows=d.anomalies||[];
+  $("#wp-knowledge-out").innerHTML=(rows.length?
+    '<table><tbody>'+rows.map(x=>`<tr><td class="mono">${esc(x.type)}</td><td>${esc((x.subject||"")+" · "+(x.kind||"")+": "+(x.detail||"").slice(0,80))}</td></tr>`).join('')+'</tbody></table>'
+    :'<div class="empty">no anomaly candidates — collect more observations first</div>');
+};}
 
 /* ---------- surface ---------- */
 function renderGraph(nodes, edges){

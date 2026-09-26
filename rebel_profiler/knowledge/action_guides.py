@@ -343,6 +343,73 @@ _ACTION_GUIDES: tuple[ActionGuide, ...] = (
         next_steps=("web-crawl",),
     ),
     ActionGuide(
+        action="cors-check",
+        capability_class="web_assessment",
+        when=("You need the cross-origin verdict for ONE origin: does the "
+              "server reflect an arbitrary Origin (and allow credentials)? "
+              "The exploitable CORS misconfig shape is detected with a "
+              "single request — detection only, never exploitation."),
+        target_shape="a single hostname (no scheme, no path); port/scheme via params",
+        target_example="h1.lab.example.test",
+        params=(("port", "1-65535, default 443"),
+                ("scheme", "http or https, default https")),
+        example={"action": "cors-check", "target": "h1.lab.example.test",
+                 "params": {"port": "8443"}},
+        output_claims=("cors_check",),
+        reads_output=("One verdict claim: acao_reflected:yes (+credentials) is "
+                      "the reportable shape; acao_reflected:no proves the "
+                      "control held and is kept so the report shows the check ran."),
+        next_steps=("header-audit", "probe"),
+    ),
+    ActionGuide(
+        action="security-txt",
+        capability_class="passive_recon",
+        when=("You need the disclosure posture of an in-scope domain: is a "
+              "security.txt published at either canonical location (RFC "
+              "9116), and what contact/policy does it name? Missing is a "
+              "reportability gap; present hands you the reporting channel."),
+        target_shape="a single hostname (no scheme, no path)",
+        target_example="lab.example.test",
+        example={"action": "security-txt", "target": "lab.example.test"},
+        output_claims=("securitytxt_check", "securitytxt_field"),
+        reads_output=("securitytxt_check carries the present/missing verdict; "
+                      "securitytxt_field claims carry Contact/Policy/Expires "
+                      "lines as context — where to report, not a finding."),
+        next_steps=("whois-lookup", "dork-search"),
+    ),
+    ActionGuide(
+        action="graphql-introspection",
+        capability_class="web_assessment",
+        when=("The origin may expose a GraphQL endpoint and you need to know "
+              "whether the schema is publicly readable. One minimal __schema "
+              "probe — no schema dump, no mutations, nothing destructive."),
+        target_shape="a single hostname or full http(s) URL; endpoint path via params",
+        target_example="h1.lab.example.test",
+        params=(("path", "endpoint path starting with /, default /graphql"),),
+        example={"action": "graphql-introspection", "target": "h1.lab.example.test",
+                 "params": {"path": "/api/graphql"}},
+        output_claims=("graphql_introspection",),
+        reads_output=("introspection:enabled names the query type and marks the "
+                      "CWE-200 exposure posture; introspection:disabled records "
+                      "the control held. Unparseable replies emit NO claim."),
+        next_steps=("js-intel", "probe"),
+    ),
+    ActionGuide(
+        action="email-spoof",
+        capability_class="passive_recon",
+        when=("You need the spoofing posture of ONE authorized domain: SPF "
+              "present, DMARC policy state. Pure DNS — no mail is ever "
+              "sent; p=none or missing records are phishing prerequisites."),
+        target_shape="a single domain name (no scheme, no path)",
+        target_example="example.test",
+        example={"action": "email-spoof", "target": "example.test"},
+        output_claims=("email_spoofing",),
+        reads_output=("One posture claim: spf:absent and dmarc p=none/absent "
+                      "mean the domain is spoofable — the finding is the DNS "
+                      "posture itself, with full provenance."),
+        next_steps=("email-osint",),
+    ),
+    ActionGuide(
         action="dir-enum",
         capability_class="web_assessment",
         when=("You need directory/file enumeration on an in-scope origin with "

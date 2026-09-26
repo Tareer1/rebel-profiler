@@ -213,6 +213,26 @@ def builtin_playbooks() -> tuple[Playbook, ...]:
                ("disasm", {"section": ".text"},
                 "read the calls in the focus section — bytes as data, never run"),
            ]),
+        pb("web-exposure", "1",
+           "Origin exposure checks: CORS, GraphQL surface, disclosure contact",
+           "rebel-profiler core", ["web", "cors", "graphql"], [
+               ("cors-check", {},
+                "foreign-Origin probe: reflected ACAO + credentials = reportable"),
+               ("graphql-introspection", {"path": "/graphql"},
+                "is the schema publicly readable? one minimal __schema probe"),
+               ("security-txt", {},
+                "disclosure posture: where should researchers report?"),
+               ("header-audit", {},
+                "header verdict for the same origin — pairs with the CORS result"),
+           ]),
+        pb("email-spoofing", "1",
+           "Domain spoofing posture via DNS (no mail is ever sent)",
+           "rebel-profiler core", ["email", "phishing", "dns"], [
+               ("email-spoof", {},
+                "SPF/DMARC posture: p=none or absent records = spoofable"),
+               ("email-osint", {},
+                "who the exposed personnel are — pairs with the spoofing posture"),
+           ]),
     )
 
 

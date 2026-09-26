@@ -218,6 +218,48 @@ class TestAnalysisTools:
         assert "definition" in g
 
 
+class TestCweAndAnomalyTools:
+    """The knowledge plane as operator tools (MCP/GUI parity — audit fix)."""
+
+    def test_cwe_lookup_by_id(self, ws):
+        ctx, db, rec = ws
+        out = call(ctx, db, rec["id"], "cwe_lookup", ref="79")
+        assert out["found"] is True
+        assert out["cwe_id"] == "CWE-79"
+        assert out["likelihood"] == "high"
+
+    def test_cwe_lookup_unknown_is_structured(self, ws):
+        ctx, db, rec = ws
+        out = call(ctx, db, rec["id"], "cwe_lookup", ref="99999")
+        assert out["found"] is False
+        assert "cwe_search" in out["note"]
+
+    def test_cwe_search_and_limit_clamp(self, ws):
+        ctx, db, rec = ws
+        out = call(ctx, db, rec["id"], "cwe_search", term="redirect")
+        assert out["count"] == len(out["results"]) > 0
+        assert any(r["cwe_id"] == "CWE-601" for r in out["results"])
+        capped = call(ctx, db, rec["id"], "cwe_search", term="redirect",
+                      limit="500")
+        assert capped["count"] <= 20
+        floor = call(ctx, db, rec["id"], "cwe_search", term="redirect",
+                     limit="0")
+        assert floor["count"] >= 1
+
+    def test_cwe_blind_spots_and_anomalies_on_empty_case(self, ws):
+        ctx, db, rec = ws
+        blind = call(ctx, db, rec["id"], "cwe_blind_spots")
+        assert blind["case_id"] == rec["id"]
+        assert "blind_spots" in blind and "rule" in blind
+        out = call(ctx, db, rec["id"], "anomalies")
+        assert out["case_id"] == rec["id"]
+        assert out["anomalies"] == []
+        assert "counts" in out
+
+
+# ---------------------------------------------------------------- browser/status
+
+
 class TestBrowserAndStatus:
     def test_browser_grab_reads_job_result_by_id(self, ws):
         from rebel_profiler.browser import BrowserJobStore

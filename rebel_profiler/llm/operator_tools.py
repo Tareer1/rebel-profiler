@@ -690,6 +690,82 @@ def _collect(ctx, db, case_id, args, scope_engine=None):
 
 
 @operator_tool(
+    "cwe_lookup",
+    "Look up ONE CWE weakness by id or name from the knowledge catalog "
+    "(offline seed merged with the official MITRE catalog when cached): "
+    "description, exploit likelihood, mitigations. Use BEFORE planning "
+    "hunts so the model understands the weakness class it is hunting.",
+    parameters={
+        "ref": "CWE id or name: '79', 'CWE-639', or 'open redirect'",
+        "refresh": '"yes" to fetch the latest MITRE catalog first',
+    },
+    required=("ref",),
+)
+def _cwe_lookup(ctx, db, case_id, args, scope_engine=None):
+    from ..intel.cwe import lookup
+
+    entry = lookup(str(args["ref"]), ctx.data_dir,
+                   refresh=str(args.get("refresh", "")).strip().lower()
+                   in {"1", "true", "yes"})
+    if entry is None:
+        return {"found": False,
+                "ref": str(args["ref"]),
+                "note": "no such CWE in the catalog — try cwe_search"}
+    return {**entry.as_dict(), "found": True}
+
+
+@operator_tool(
+    "cwe_search",
+    "Keyword-search the CWE knowledge catalog for weakness classes "
+    "relevant to the hunt (e.g. 'redirect', 'cookie', 'template').",
+    parameters={"term": "keyword, minimum 3 characters",
+                "limit": "optional max results (1-20, default 10)"},
+    required=("term",),
+)
+def _cwe_search(ctx, db, case_id, args, scope_engine=None):
+    from ..intel.cwe import search
+
+    try:
+        limit = int(args.get("limit", 10))
+    except (TypeError, ValueError):
+        limit = 10
+    results = search(str(args["term"]), ctx.data_dir,
+                     limit=max(1, min(limit, 20)))
+    return {"term": str(args["term"]), "count": len(results),
+            "results": [r.as_dict() for r in results]}
+
+
+@operator_tool(
+    "cwe_blind_spots",
+    "Rank the weakness classes THIS case has NOT probed yet by MITRE "
+    "exploit likelihood, then by whether a gated detect action can still "
+    "run. This is the honest 'what are we missing' answer — pair it with "
+    "collect to close the top gaps.",
+)
+def _cwe_blind_spots(ctx, db, case_id, args, scope_engine=None):
+    from ..intel.cwe import blind_spots
+    from ..intel.claims import ClaimLedger
+
+    ledger = ClaimLedger.load_from_db(db, case_id)
+    return blind_spots(ledger, case_id, ctx.data_dir)
+
+
+@operator_tool(
+    "anomalies",
+    "Unknown-vulnerability candidates over this case's own claims: drift "
+    "(same attribute changed between collections), rare-value outliers "
+    "(one subject holds what no peer does) and first-seen surface. "
+    "Candidates, NOT findings — verify through the gated probe plane.",
+)
+def _anomalies(ctx, db, case_id, args, scope_engine=None):
+    from ..intel.anomaly import detect_anomalies
+    from ..intel.claims import ClaimLedger
+
+    ledger = ClaimLedger.load_from_db(db, case_id)
+    return detect_anomalies(ledger, case_id)
+
+
+@operator_tool(
     "hunt_run",
     "Run the autonomous JS-surface hunt on one in-scope seed URL (case must "
     "be active). Mines scripts for endpoints, secrets and cloud hosts, folds "
