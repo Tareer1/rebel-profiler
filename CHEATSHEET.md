@@ -592,6 +592,19 @@ run/work/auto` and the daemon.
 `0` ok · `2` usage · `3` config · `4` permission/policy · `5` scope ·
 `7` dependency · `11` evidence tamper · `12` state · `15` model budget
 
+## 12b. Unknown-vulnerability candidates (anomaly plane)
+
+```bash
+rebel-profiler intel anomalies <case-id>
+```
+
+Known-CVE matching answers "is this version vulnerable?" — but unpublished
+weaknesses surface first as CHANGES and OUTLIERS over the case's own
+claims: `drift` (same attribute changed between collections), `rare` (a
+value exactly one subject holds while every peer differs), `first-seen`
+(new surface). Deterministic, offline, no opinions — candidates ≠ findings:
+verify through the gated probe plane before reporting anything.
+
 ## 12. CWE knowledge (offline seed + official MITRE catalog, live-fetched once)
 
 ```bash

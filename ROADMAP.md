@@ -301,6 +301,13 @@ weakening a single gate. Every item keeps the Phase 1 invariants.
   deliberately absent: detection, not disruption. The `wifi-posture`
   playbook chains monitor → survey → restore → audit; three
   `wifi_*` vulnerability-coverage rows and action guides ship with it
+- [x] **Unknown-vulnerability detection (anomaly plane)**: unpublished
+  weaknesses surface first as CHANGES and OUTLIERS — `intel anomalies
+  <case>` computes deterministic drift (same attribute changed between
+  collections), rare-value outliers (a value exactly one subject holds
+  while every peer differs) and first-seen candidates over the case's
+  own claim ledger, each with claim provenance; candidates ≠ findings,
+  verification stays behind the gates
 - [x] **CWE knowledge plane**: the official MITRE `cwec_latest` catalog
   (weaknesses + categories, v4.20, ~1391 entries) is fetched once on
   demand with a distinct User-Agent, parsed to a compact cache under the

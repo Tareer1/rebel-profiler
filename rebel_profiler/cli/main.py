@@ -545,6 +545,8 @@ def cmd_intel(ctx: AppContext, args: argparse.Namespace) -> int:
         return EXIT_SUCCESS
     if args.intel_command == "cwe":
         return _cmd_intel_cwe(ctx, args)
+    if args.intel_command == "anomalies":
+        return _cmd_intel_anomalies(ctx, args)
     if args.intel_command == "sanitize":
         from ..intel import injection_report
         if args.stdin or args.text is None:
@@ -700,6 +702,35 @@ def cmd_agent(ctx: AppContext, args: argparse.Namespace) -> int:
         return EXIT_SUCCESS if ok else 1
     finally:
         db.close()
+
+
+def _cmd_intel_anomalies(ctx: AppContext, args: argparse.Namespace) -> int:
+    """Unknown-vulnerability candidates: drift, outliers, first-seen."""
+    from ..intel.anomaly import detect_anomalies
+    from ..intel.claims import ClaimLedger
+
+    rec = ctx.find_case(args.case_id)
+    db = ctx.open_case(rec["id"])
+    try:
+        ledger = ClaimLedger.load_from_db(db, rec["id"])
+        report = detect_anomalies(ledger, rec["id"])
+    finally:
+        db.close()
+    counts = report["counts"]
+    human = [f"Anomaly analysis — case {rec['id']} "
+             f"({report['subjects_analyzed']} subject(s)): "
+             f"{counts['drift']} drift, {counts['rare']} outlier, "
+             f"{counts['first_seen']} first-seen candidate(s)"]
+    marks = {"drift": "⇄", "rare": "◈", "first_seen": "+"}
+    for f in report["anomalies"][:15]:
+        human.append(f"  [{marks[f['type']]} {f['type']}] {f['subject'][:40]} "
+                     f"{f['kind']}: {f['detail'][:80]}")
+    if not report["anomalies"]:
+        human.append("  (no candidates — collect more observations first)")
+    human.append("  candidates ≠ findings: verify through the gated probe "
+                 "plane before reporting anything")
+    emit({"human": "\n".join(human), "data": report}, args.output)
+    return EXIT_SUCCESS
 
 
 def _cmd_intel_cwe(ctx: AppContext, args: argparse.Namespace) -> int:
@@ -3510,6 +3541,9 @@ def build_parser() -> argparse.ArgumentParser:
     pcwe_b.add_argument("case_id")
     pcwe_st = pcwe_subs.add_parser("status", parents=[sub_common],
                                    help="catalog cache status")
+    p_ian = intel_subs.add_parser("anomalies", parents=[sub_common],
+                                  help="unknown-vulnerability candidates: drift, outliers and first-seen surface over this case's claims")
+    p_ian.add_argument("case_id")
     p_ipb = intel_subs.add_parser("playbook", parents=[sub_common],
                                   help="hunt playbooks: reviewed multi-step recipes expanded into gated plans")
     ipb_subs = p_ipb.add_subparsers(dest="playbook_command", required=True)
