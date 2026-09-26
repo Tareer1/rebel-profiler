@@ -75,7 +75,7 @@ def build_plan_prompt(view, *, compact: bool = False) -> str:
     """
     goal = redact(str(view.goal))[:PROMPT_GOAL_MAX_CHARS]
     actions = view.available_actions()
-    compact = bool(getattr(view, "compact", False))
+    compact = compact or bool(getattr(view, "compact", False))
     from ..knowledge.action_guides import find_action_guide
 
     if compact:
