@@ -18,6 +18,7 @@ from pathlib import Path
 
 from ..core.config import get as _cfg_get
 from ..core.errors import EXIT_SUCCESS, EXIT_USAGE, RPError, UsageError
+from ..core.i18n import t as _t
 from ..evidence.audit import AuditChain
 from ..intel.claims import ClaimLedger
 from ..intel.sources import SourceRegistry
@@ -3226,10 +3227,9 @@ def cmd_doctor(ctx: AppContext, args: argparse.Namespace) -> int:
                       "see docs/WSL.md for the verified support matrix",
         })
     ok = all(c["ok"] == "yes" for c in checks)
-    verdict = (f"doctor: ALL CHECKS PASSED {theme.GREEN}{theme.GLYPHS['ok']}{theme.RESET}"
+    verdict = (_t("doctor.all_ok", glyph=f"{theme.GREEN}{theme.GLYPHS['ok']}{theme.RESET}")
                if ok else
-               f"doctor: ISSUES FOUND {theme.YELLOW}{theme.GLYPHS['warn']}{theme.RESET} "
-               "(see table)")
+               _t("doctor.issues", glyph=f"{theme.YELLOW}{theme.GLYPHS['warn']}{theme.RESET}"))
     emit({"human": f"{theme.CYAN}{theme.GLYPHS['shield']} {verdict}{theme.RESET}",
           "data": checks}, args.output)
     return EXIT_SUCCESS if ok else 1

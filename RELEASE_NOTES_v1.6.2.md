@@ -14,9 +14,13 @@ as the everyday register. Version pins aligned to 1.6.2 everywhere.
   no font tricks needed; Urdu (`RP_LANG=ur`) stays for Perso-Arabic
   terminals and renders through the terminal's own bidi.
 * Alias codes accepted: `hi-ur`, `hinglish`, `hi`, `roman-urdu`.
-* The error frame, `RPError.render()` and every future localized surface
-  route through `i18n.t()`; JSON/JSONL/CSV, exit codes and schema keys are
+* Localized operator surfaces now cover the structured error frame,
+  `RPError.render()`, the shell (console map, pin/close/unknown-command
+  notes), the banner taglines and the doctor verdict — in all three
+  languages, via `i18n.t()`.
+* JSON/JSONL/CSV, exit codes and schema keys are
   byte-identical in all three languages (pinned by `tests/test_i18n.py`).
+  `RP_LANG=hi-ur` can be pinned in `~/.bashrc` as the daily default.
 
 ## Post-quantum readiness review (ROADMAP Phase 12 closeout)
 

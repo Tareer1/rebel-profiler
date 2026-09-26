@@ -97,10 +97,8 @@ def banner() -> str:
         f"{CYAN}{BOLD} {GLYPHS['shield']}{GLYPHS['shield']}{GLYPHS['shield']} "
         f"R E B E L · P R O F I L E R{RESET}",
         f"{DIM} {bar}{RESET}",
-        f"{MAGENTA} {GLYPHS['bolt']} authorized security operations — "
-        f"the LLM reasons · the system decides{RESET}",
-        f"{DIM} scope fails closed · no raw shell · no claim without evidence · "
-        f":help inside shell{RESET}",
+        f"{MAGENTA} {GLYPHS['bolt']} {_t('banner.tagline')}{RESET}",
+        f"{DIM} {_t('banner.laws')}{RESET}",
     ]
     return "\n".join(lines)
 

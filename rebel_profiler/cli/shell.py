@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 
+from ..core.i18n import t as _t
 from . import theme
 
 try:
@@ -75,12 +76,12 @@ def _help() -> str:
         (":banner", "re-render the banner"),
         (":clear", "clear the screen"),
         (":exit / :q", "leave the shell"),
-        ("everything else", "runs as a rebel-profiler CLI command"),
+        ("everything else", _t("shell.help_everything")),
     ]
-    out = [f"{BOLD}console map{RESET}"]
+    out = [f"{BOLD}{_t('shell.help_title')}{RESET}"]
     for cmd, desc in rows:
         out.append(f"  {CYAN}{cmd:<16}{RESET} {DIM}{desc}{RESET}")
-    out.append(f"\n{DIM}examples:{RESET}")
+    out.append(f"\n{DIM}{_t('shell.examples')}{RESET}")
     out.append(f"  {DIM}intel collect <case> subfinder-enum crypto.com{RESET}")
     out.append(f"  {DIM}bounty hunt crypto --no-author{RESET}")
     out.append(f"  {DIM}intel payload deploy <case> ssti --target <url> --approve{RESET}")
@@ -115,12 +116,12 @@ def run_shell(ctx, argv: list[str] | None = None) -> int:
         try:
             line = input(_prompt(pinned)).strip()
         except (EOFError, KeyboardInterrupt):
-            print(f"\n{DIM}⌁ link closed{RESET}")
+            print(f"\n{DIM}{_t('shell.link_closed')}{RESET}")
             break
         if not line:
             continue
         if line in {":exit", ":q", "exit", "quit"}:
-            print(f"{CYAN}{GLYPHS['shield']} session closed · chains remain verifiable{RESET}")
+            print(f"{CYAN}{GLYPHS['shield']} {_t('shell.session_closed')}{RESET}")
             break
         if line == ":clear":
             os.system("clear")   # noqa: S605 — cosmetic, fixed command
@@ -138,36 +139,36 @@ def run_shell(ctx, argv: list[str] | None = None) -> int:
             parts = line.split(maxsplit=1)
             if len(parts) == 2:
                 pinned = parts[1].strip()
-                print(f"{GLYPHS['node']} pinned → {CYAN}{pinned}{RESET}")
+                print(f"{GLYPHS['node']} " + _t("shell.pinned", case=f"{CYAN}{pinned}{RESET}"))
             else:
                 _run_cli(["case", "list"])
             continue
         if line == ":status":
             if not pinned:
-                print(f"{YELLOW}{GLYPHS['warn']} pin a case first: :case <id>{RESET}")
+                print(f"{YELLOW}{GLYPHS['warn']} {_t('shell.pin_first')}{RESET}")
                 continue
             print(_short_status(ctx, pinned))
             continue
         if line == ":plan":
             if not pinned:
-                print(f"{YELLOW}{GLYPHS['warn']} pin a case first: :case <id>{RESET}")
+                print(f"{YELLOW}{GLYPHS['warn']} {_t('shell.pin_first')}{RESET}")
                 continue
             _run_cli(["intel", "attack-plan", pinned])
             continue
         if line == ":cover":
             if not pinned:
-                print(f"{YELLOW}{GLYPHS['warn']} pin a case first: :case <id>{RESET}")
+                print(f"{YELLOW}{GLYPHS['warn']} {_t('shell.pin_first')}{RESET}")
                 continue
             _run_cli(["intel", "vuln-coverage", pinned])
             continue
         if line.startswith(":"):
-            print(f"{RED}{GLYPHS['no']} unknown console command '{line}'{RESET} "
-                  f"{DIM}— :help lists them{RESET}")
+            print(f"{RED}{GLYPHS['no']} {_t('shell.unknown_cmd', cmd=line)}{RESET} "
+                  f"{DIM}{_t('shell.unknown_hint')}{RESET}")
             continue
         # Everything else: the real CLI, verbatim.
         code = _run_cli(line.split())
         if code not in (0, 130):
-            print(f"{DIM}{GLYPHS['dots']} exit={code} — structured errors carry the fix{RESET}")
+            print(f"{DIM}{GLYPHS['dots']} {_t('shell.exit_note', code=code)}{RESET}")
 
     if _HAS_READLINE:
         try:
