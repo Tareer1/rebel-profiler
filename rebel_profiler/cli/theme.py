@@ -17,6 +17,8 @@ from __future__ import annotations
 import os
 import sys
 
+from ..core.i18n import t as _t
+
 # ── enable detection ───────────────────────────────────────────────────────
 
 _NO_COLOR = bool(os.environ.get("NO_COLOR"))
@@ -125,16 +127,15 @@ def error_frame(title: str, message: str, reason: str, action: str,
                  color=f"{RED}{BOLD}")]
     out.append(f"{RED}{BOX['v']}{RESET} {BOLD}{message}{RESET}")
     if reason:
-        out.append(f"{RED}{BOX['v']}{RESET} {DIM}Reason:{RESET}")
+        out.append(f"{RED}{BOX['v']}{RESET} {DIM}{_t('theme.reason')}{RESET}")
         for ln in _wrap(reason, WIDTH - 6):
             out.append(f"{RED}{BOX['v']}{RESET}   {ln}")
     if action:
-        out.append(f"{RED}{BOX['v']}{RESET} {DIM}Action:{RESET}")
+        out.append(f"{RED}{BOX['v']}{RESET} {DIM}{_t('theme.action')}{RESET}")
         for ln in _wrap(action, WIDTH - 8):
             out.append(f"{RED}{BOX['v']}{RESET}   {CYAN}{GLYPHS['arrow']} {ln}{RESET}")
-    out.append(_edge(BOX["bl"], f"exit {exit_code} {GLYPHS['dots']} every "
-                              f"denial is audited", BOX["br"],
-                     color=f"{RED}{BOLD}"))
+    out.append(_edge(BOX["bl"], _t("theme.exit_footer", code=exit_code),
+                     BOX["br"], color=f"{RED}{BOLD}"))
     return "\n".join(out)
 
 

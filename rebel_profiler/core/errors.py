@@ -7,6 +7,8 @@ structured, beginner-friendly message (what / why / next action).
 
 from __future__ import annotations
 
+from .i18n import t as _t
+
 EXIT_SUCCESS = 0
 EXIT_GENERAL = 1
 EXIT_USAGE = 2
@@ -41,11 +43,11 @@ class RPError(Exception):
         lines = [f"{self.title}: {self.message}"]
         if self.reason:
             lines.append("")
-            lines.append("Reason:")
+            lines.append(_t("theme.reason"))
             lines.append(f"  {self.reason}")
         if self.action:
             lines.append("")
-            lines.append("Action:")
+            lines.append(_t("theme.action"))
             lines.append(f"  {self.action}")
         return "\n".join(lines)
 

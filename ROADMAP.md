@@ -268,9 +268,14 @@ weakening a single gate. Every item keeps the Phase 1 invariants.
   running zipapp; refused entirely when offline or when the checksum does
   not match — tested against a local fixture release, mismatch never
   touches the installed bytes
-- [ ] **Post-quantum readiness review**: inventory every hash (SHA-256
-  evidence chains, HMAC audit signing) and key agreement surface against
-  the NIST PQC migration path; document what must change first
+- [x] **Post-quantum readiness review** (docs/PQC_REVIEW.md): every hash
+  (SHA-256 evidence chains, HMAC audit/webhook/forge signing, scrypt
+  credential KDF) and the key-agreement surface inventoried against the
+  NIST PQC migration path (FIPS 203/204/205); verdict: all current
+  primitives quantum-resilient, the only Shor exposure is a future remote
+  transport (hybrid ML-KEM TLS mandated before any such hop), order of
+  change documented — and pinned by tests/test_pqc_review.py so no banned
+  primitive (MD5/SHA-1/RSA/ECDSA) can enter the tree unreviewed
 - [x] **Hunt playbooks** (`intel playbook list/show/run`,
   `intel/playbooks.py`): named, versioned multi-step hunt recipes — four
   built-ins (quick-surface, web-audit, js-secrets, dns-health) plus operator
@@ -368,6 +373,12 @@ weakening a single gate. Every item keeps the Phase 1 invariants.
   verified matrix — full core/RE/web/LLM support under WSL2, honest
   partials (tcpdump aggregates, raw-socket craft), and the RF plane
   stated as bare-metal-only rather than faked
-- [ ] **Localization**: CLI messages and docs in Urdu + English throughout,
-  starting with the human-mode strings (structure, exit codes and JSON
-  contracts stay language-neutral)
+- [x] **Localization (scaffolding shipped)**: `core/i18n.py` — `RP_LANG=ur`
+  selects Urdu operator strings; English default stays byte-identical to
+  earlier releases; a key missing in one language falls back to English and
+  a key no language declares returns itself (never an empty string). The
+  structured error frame (Reason/Action/exit footer) and
+  `RPError.render()` localize first; JSON/JSONL/CSV contracts, exit codes
+  and schema versions stay language-neutral — pinned by tests/test_i18n.py.
+  String coverage grows release by release; the scaffolding, the selection
+  law and the fallback are what ship now
